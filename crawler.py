@@ -49,7 +49,7 @@ from database import (
     is_post_exists, init_database,
     get_blogger_oldest_mid, get_blogger_newest_mid,
     update_crawl_progress, get_crawl_progress,
-    get_post_comment_count
+    get_post_comment_count, update_post_local_images
 )
 
 
@@ -1254,9 +1254,11 @@ class WeiboCrawler:
                 # 更新抓取进度
                 update_crawl_progress(uid, mid, post.get("created_at", ""), is_newer=(mode == "new"))
 
-                # 下载图片
+                # 下载图片并更新数据库
                 if post.get("images"):
-                    self.download_images(post)
+                    local_paths = self.download_images(post)
+                    if local_paths:
+                        update_post_local_images(mid, local_paths)
 
             # 获取评论（微博发布 N 天后才抓取，让评论稳定下来）
             api_comment_count = post.get("comments_count", 0)

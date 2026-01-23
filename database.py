@@ -42,6 +42,7 @@ def init_database():
                 repost_nickname TEXT,
                 repost_content TEXT,
                 images TEXT,
+                local_images TEXT,
                 video_url TEXT,
                 source_url TEXT,
                 crawled_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -143,8 +144,8 @@ def save_post(post: dict) -> bool:
             INSERT INTO posts (mid, uid, content, created_at, reposts_count,
                              comments_count, likes_count, is_repost,
                              repost_uid, repost_nickname, repost_content,
-                             images, video_url, source_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             images, local_images, video_url, source_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             post["mid"],
             post["uid"],
@@ -158,6 +159,7 @@ def save_post(post: dict) -> bool:
             post.get("repost_nickname"),
             post.get("repost_content"),
             images_json,
+            post.get("local_images"),  # JSON 格式的本地图片路径列表
             post.get("video_url"),
             post.get("source_url"),
         ))
@@ -331,3 +333,15 @@ def get_post_comment_count(mid: str) -> int:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM comments WHERE mid = ?", (mid,))
         return cursor.fetchone()[0]
+
+
+def update_post_local_images(mid: str, local_images: list):
+    """更新微博的本地图片路径"""
+    import json
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        local_images_json = json.dumps(local_images, ensure_ascii=False)
+        cursor.execute("""
+            UPDATE posts SET local_images = ? WHERE mid = ?
+        """, (local_images_json, mid))
+        conn.commit()
