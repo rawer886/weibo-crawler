@@ -1258,12 +1258,26 @@ class WeiboCrawler:
                 if post.get("images"):
                     self.download_images(post)
 
-            # 获取评论（新微博或已有微博但还没抓过评论的）
+            # 获取评论（微博发布 N 天后才抓取，让评论稳定下来）
             api_comment_count = post.get("comments_count", 0)
             existing_comment_count = get_post_comment_count(mid)
+            comment_delay_days = CRAWLER_CONFIG.get("comment_delay_days", 3)
 
-            if api_comment_count > 0 and existing_comment_count == 0:
-                # 有评论但还没抓过
+            # 检查微博是否已发布足够久
+            post_age_ok = False
+            if post.get("created_at"):
+                try:
+                    from datetime import timedelta
+                    post_date = datetime.fromisoformat(post["created_at"].replace("Z", "+00:00"))
+                    post_age = datetime.now() - post_date.replace(tzinfo=None)
+                    post_age_ok = post_age.days >= comment_delay_days
+                    if not post_age_ok:
+                        logger.info(f"微博发布不足 {comment_delay_days} 天，跳过评论抓取")
+                except:
+                    post_age_ok = True  # 解析失败时默认抓取
+
+            if api_comment_count > 0 and existing_comment_count == 0 and post_age_ok:
+                # 有评论、还没抓过、且已发布足够久
                 comments = self.get_comments(uid, mid)
                 saved_count = 0
                 for comment in comments:
@@ -1272,7 +1286,7 @@ class WeiboCrawler:
                 logger.info(f"保存了 {saved_count} 条评论")
             elif existing_comment_count > 0:
                 logger.info(f"评论已抓取过 ({existing_comment_count} 条)，跳过")
-            else:
+            elif api_comment_count == 0:
                 logger.info("该微博无评论")
 
             if not is_new_post:

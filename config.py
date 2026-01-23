@@ -37,6 +37,9 @@ CRAWLER_CONFIG = {
     # 如果一次请求返回的数据超过这个数量，会全部存储（不浪费已返回的数据）
     "max_comments_per_post": 10,
 
+    # 微博发布多少天后才抓取评论（让评论稳定下来）
+    "comment_delay_days": 3,
+
     # 是否只抓取热门评论
     "hot_comments_only": True,
 
