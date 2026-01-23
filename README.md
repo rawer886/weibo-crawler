@@ -29,15 +29,20 @@ weibo-crawler/
 
 ## 功能特性
 
-- ✅ 自动登录和cookie管理
-- ✅ 支持多个博主同时抓取
-- ✅ 断点续传（支持向前抓新微博和向后抓历史）
-- ✅ 时间范围限制（默认180天）
-- ✅ 评论抓取延迟策略（微博发布N天后才抓评论）
-- ✅ **评论回复关系识别**（主评论和子评论的父子关系）
-- ✅ 图片下载（支持浏览器缓存优先）
-- ✅ API响应永久缓存（减少重复请求）
-- ✅ 优雅停止（Ctrl+C）
+### 核心功能
+- 🔐 自动登录和cookie管理
+- 👥 支持多个博主同时抓取
+- 🔄 断点续传（支持向前抓新微博和向后抓历史）
+- ⏰ 时间范围限制（默认180天）
+- 💬 **评论回复关系识别**（主评论和子评论的父子关系）
+- 📸 图片下载（支持浏览器缓存优先）
+- 💾 API响应永久缓存（减少重复请求）
+- ⚡ 优雅停止（Ctrl+C）
+
+### 智能策略
+- 评论抓取延迟：微博发布N天后才抓评论，让评论稳定下来
+- 随机延迟：8-30秒随机间隔，避免被封
+- 缓存优化：历史数据永久缓存，新数据实时抓取
 
 ## 数据库结构
 
@@ -99,46 +104,38 @@ CRAWLER_CONFIG = {
 }
 ```
 
-## 使用方法
+## 快速开始
 
-### 1. 运行主程序
+### 首次运行
 
 ```bash
+# 激活虚拟环境
 source venv/bin/activate
+
+# 运行主程序
 python main.py
 ```
 
-第一次运行会要求手动登录微博，登录后cookie会自动保存。
+首次运行会打开浏览器窗口，需要手动登录微博。登录成功后按 Enter 继续，cookie 会自动保存。
 
-### 2. 抓取模式
+### 抓取模式
 
-- **new**: 只抓取新微博（从最新开始，遇到已入库的就停止）
-- **history**: 继续向后抓取历史微博（从上次停下的位置继续）
-- **all**: 先抓新的，再抓历史（默认）
+在 `main.py` 中可以选择不同的抓取模式：
 
-### 3. 查询博主评论
+```python
+# 只抓取新微博
+run_crawler(BLOGGER_UIDS, mode="new")
 
-```bash
-python scripts/query_blogger_comments.py <微博ID>
+# 继续抓取历史微博
+run_crawler(BLOGGER_UIDS, mode="history")
+
+# 先抓新的，再抓历史（默认）
+run_crawler(BLOGGER_UIDS, mode="all")
 ```
 
-示例输出：
-```
-【评论 1】
-  评论ID: 5253489136775271_6329764758701369623
-  时间: 26-1-10 13:51
-  点赞数: 41
-  📝 评论内容: 出清还要死一批
-  ↳ @不出轨了: 有我一个ST归零的奉献
-```
+### 停止爬虫
 
-### 4. 测试单条微博
-
-```bash
-python tests/test_single_post.py <博主UID> <微博ID>
-```
-
-详细说明请查看 `tests/README.md` 和 `scripts/README.md`。
+按 `Ctrl+C` 可以优雅停止（会等待当前任务完成并关闭浏览器）。再按一次可强制退出。
 
 ## 评论回复关系
 
@@ -153,13 +150,62 @@ python tests/test_single_post.py <博主UID> <微博ID>
 - `reply_to_nickname`: 被回复者的昵称
 - `reply_to_content`: 被回复的内容
 
+## 扩展工具
+
+项目包含以下工具目录：
+
+- **scripts/**: 数据查询和分析脚本（详见 [scripts/README.md](scripts/README.md)）
+- **tests/**: 功能测试脚本（详见 [tests/README.md](tests/README.md)）
+
+## 常见问题
+
+### 登录失效
+删除 `data/cookies.json`，重新运行程序手动登录。
+
+### 浏览器打不开
+检查是否安装了 Playwright 浏览器：
+```bash
+playwright install chromium
+```
+
+### 抓取速度慢
+这是正常的！为了避免被封，默认 8-30 秒间隔。可以在 `config.py` 中适当调整：
+```python
+CRAWLER_CONFIG = {
+    "min_delay": 5,   # 最小延迟（秒）
+    "max_delay": 15,  # 最大延迟（秒）
+}
+```
+
+### 查看数据
+使用 SQLite 命令行：
+```bash
+sqlite3 data/weibo.db
+
+# 查看博主列表
+SELECT * FROM bloggers;
+
+# 查看最新微博
+SELECT mid, content, created_at FROM posts ORDER BY created_at DESC LIMIT 10;
+
+# 查看博主评论
+SELECT * FROM comments WHERE is_blogger_reply = 1;
+```
+
 ## 注意事项
 
-1. **登录**：首次运行需要手动登录，之后会自动使用保存的cookies
-2. **速度限制**：默认8-30秒随机间隔，避免被封
-3. **评论延迟**：默认微博发布3天后才抓评论，让评论稳定
-4. **时间范围**：默认只抓取最近180天的微博
+1. **登录**：首次运行需要手动登录，之后会自动使用保存的 cookies
+2. **速度限制**：默认 8-30 秒随机间隔，避免被封
+3. **评论延迟**：默认微博发布 3 天后才抓评论，让评论稳定
+4. **时间范围**：默认只抓取最近 180 天的微博
 5. **缓存**：历史微博列表会永久缓存，减少重复请求
+
+## 技术栈
+
+- Python 3.7+
+- Playwright (浏览器自动化)
+- SQLite (数据存储)
+- Requests (HTTP 请求)
 
 ## 许可证
 
