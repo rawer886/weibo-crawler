@@ -63,6 +63,8 @@ def init_database():
                 likes_count INTEGER DEFAULT 0,
                 is_blogger_reply INTEGER DEFAULT 0,
                 reply_to_comment_id TEXT,
+                reply_to_uid TEXT,
+                reply_to_nickname TEXT,
                 reply_to_content TEXT,
                 crawled_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (mid) REFERENCES posts(mid)
@@ -183,8 +185,8 @@ def save_comment(comment: dict) -> bool:
         cursor.execute("""
             INSERT INTO comments (comment_id, mid, uid, nickname, content,
                                 created_at, likes_count, is_blogger_reply,
-                                reply_to_comment_id, reply_to_content)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                reply_to_comment_id, reply_to_uid, reply_to_nickname, reply_to_content)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             comment["comment_id"],
             comment["mid"],
@@ -195,6 +197,8 @@ def save_comment(comment: dict) -> bool:
             comment.get("likes_count", 0),
             1 if comment.get("is_blogger_reply") else 0,
             comment.get("reply_to_comment_id"),
+            comment.get("reply_to_uid"),
+            comment.get("reply_to_nickname"),
             comment.get("reply_to_content"),
         ))
         conn.commit()

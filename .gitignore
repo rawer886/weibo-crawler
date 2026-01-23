@@ -4,16 +4,11 @@ __pycache__/
 venv/
 .venv/
 
-# Data
-*.db
-cookies.json
-cache/
-images/
-
-# Logs
-*.log
+# Data directory (all runtime files)
+data/
 
 # IDE
 .idea/
 .vscode/
 *.swp
+.DS_Store

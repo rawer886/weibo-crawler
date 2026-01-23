@@ -706,10 +706,12 @@ class WeiboCrawler:
             self.page.wait_for_load_state("domcontentloaded", timeout=15000)
             logger.debug("页面 DOM 已加载")
 
-            # 滚动到评论区
+            # 滚动到评论区，多次滚动确保 virtual scroller 加载更多评论
             logger.debug("滚动到评论区...")
-            self.page.evaluate("window.scrollBy(0, 500)")
-            self._random_delay(2, 3)
+            for _ in range(3):
+                self.page.evaluate("window.scrollBy(0, 500)")
+                time.sleep(0.5)
+            self._random_delay(1, 2)
 
             # 尝试切换到热门评论（跳过，默认就是热门排序）
             # logger.debug("尝试点击热门标签...")
@@ -730,23 +732,33 @@ class WeiboCrawler:
             try:
                 logger.debug("开始查找评论元素...")
 
-                # 直接获取所有主评论的 .con1 元素
-                main_comments_elems = self.page.locator('.wbpro-list .item1 .con1').all()
-                logger.info(f"找到 {len(main_comments_elems)} 条主评论")
+                # 获取所有主评论容器（.item1），每个主评论可能包含子评论
+                main_comment_items = self.page.locator('.wbpro-list .item1').all()
+                logger.info(f"找到 {len(main_comment_items)} 条主评论容器")
 
-                for elem in main_comments_elems:
-                    main_comment = self._parse_comment_from_con(elem, mid, uid)
-                    if main_comment:
-                        comments.append(main_comment)
+                for item in main_comment_items:
+                    # 解析主评论
+                    main_con = item.locator('.con1').first
+                    if main_con.count() > 0:
+                        main_comment = self._parse_comment_from_con(main_con, mid, uid)
+                        if main_comment:
+                            comments.append(main_comment)
 
-                # 获取所有子评论的 .con2 元素
-                sub_comments_elems = self.page.locator('.wbpro-list .list2 .item2 .con2').all()
-                logger.info(f"找到 {len(sub_comments_elems)} 条子评论")
+                            # 检查该主评论下是否有子评论
+                            sub_list = item.locator('.list2 .item2').all()
+                            if sub_list:
+                                logger.debug(f"主评论 {main_comment['comment_id']} 有 {len(sub_list)} 条子评论")
 
-                for elem in sub_comments_elems:
-                    sub_comment = self._parse_comment_from_con(elem, mid, uid, is_sub=True)
-                    if sub_comment:
-                        comments.append(sub_comment)
+                                for sub_item in sub_list:
+                                    sub_con = sub_item.locator('.con2').first
+                                    if sub_con.count() > 0:
+                                        # 传入父评论信息
+                                        sub_comment = self._parse_comment_from_con(
+                                            sub_con, mid, uid, is_sub=True,
+                                            parent_comment=main_comment
+                                        )
+                                        if sub_comment:
+                                            comments.append(sub_comment)
 
             except Exception as e:
                 logger.warning(f"评论解析失败: {e}")
@@ -866,9 +878,16 @@ class WeiboCrawler:
             logger.debug(f"解析评论失败: {e}")
             return None
 
-    def _parse_comment_from_con(self, elem, mid: str, blogger_uid: str, is_sub: bool = False) -> Optional[dict]:
+    def _parse_comment_from_con(self, elem, mid: str, blogger_uid: str, is_sub: bool = False, parent_comment: dict = None) -> Optional[dict]:
         """
         从 .con1 或 .con2 元素解析评论
+
+        参数:
+            elem: DOM 元素
+            mid: 微博ID
+            blogger_uid: 博主UID
+            is_sub: 是否是子评论
+            parent_comment: 父评论信息（如果是子评论）
 
         结构:
         .con1/.con2
@@ -888,8 +907,17 @@ class WeiboCrawler:
                 "likes_count": 0,
                 "is_blogger_reply": False,
                 "reply_to_comment_id": None,
+                "reply_to_uid": None,
+                "reply_to_nickname": None,
                 "reply_to_content": None,
             }
+
+            # 如果是子评论，设置父评论关系
+            if is_sub and parent_comment:
+                comment["reply_to_comment_id"] = parent_comment.get("comment_id")
+                comment["reply_to_uid"] = parent_comment.get("uid")
+                comment["reply_to_nickname"] = parent_comment.get("nickname")
+                comment["reply_to_content"] = parent_comment.get("content")
 
             # 获取用户信息 - 从 usercard 属性获取 uid
             try:
