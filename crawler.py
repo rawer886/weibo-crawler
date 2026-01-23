@@ -358,6 +358,8 @@ class WeiboCrawler:
                 self.is_logged_in = False
                 return False
             self.is_logged_in = True
+            # 登录状态有效时，更新保存 cookies（保持会话活跃）
+            self._save_cookies()
             return True
         except Exception as e:
             logger.warning(f"检查登录状态失败: {e}")
