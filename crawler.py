@@ -439,7 +439,7 @@ class WeiboCrawler:
             logger.error(f"API 请求失败: {e}")
             return None
 
-    def get_post_list_via_api(self, uid: str, since_id: str = None, max_count: int = None) -> Tuple[List[dict], str]:
+    def get_post_list_via_api(self, uid: str, since_id: str = None, max_count: int = None, check_date: bool = False) -> Tuple[List[dict], str, bool]:
         """
         通过移动端 API 获取微博列表
 
@@ -447,16 +447,21 @@ class WeiboCrawler:
             uid: 博主ID
             since_id: 从这条微博之后开始获取（用于向后翻页）
             max_count: 最多获取多少条
+            check_date: 是否检查时间范围（超出范围停止）
 
         返回:
-            (微博列表, 下一页的since_id)
+            (微博列表, 下一页的since_id, 是否因超时间范围而停止)
         """
-        max_count = max_count or CRAWLER_CONFIG["max_posts_per_blogger"]
+        max_count = max_count or CRAWLER_CONFIG.get("max_posts_per_run", 50)
+        max_days = CRAWLER_CONFIG.get("max_days", 180)
+        from datetime import timedelta
+        cutoff_date = datetime.now() - timedelta(days=max_days)
         container_id = f"107603{uid}"
 
         posts = []
         current_since_id = since_id
         page = 1
+        reached_cutoff = False  # 是否到达时间截止点
 
         while len(posts) < max_count:
             url = f"https://m.weibo.cn/api/container/getIndex?containerid={container_id}"
@@ -529,10 +534,24 @@ class WeiboCrawler:
                         if large_url:
                             post["images"].append(large_url)
 
+                    # 检查时间范围
+                    if check_date and post["created_at"]:
+                        try:
+                            post_date = datetime.fromisoformat(post["created_at"].replace("Z", "+00:00"))
+                            if post_date.replace(tzinfo=None) < cutoff_date:
+                                logger.info(f"微博 {mid} 已超出 {max_days} 天范围，停止抓取")
+                                reached_cutoff = True
+                                break
+                        except:
+                            pass
+
                     posts.append(post)
 
                     if len(posts) >= max_count:
                         break
+
+                if reached_cutoff:
+                    break
 
                 # 获取下一页的 since_id
                 card_info = data.get("data", {}).get("cardlistInfo", {})
@@ -550,7 +569,7 @@ class WeiboCrawler:
                 break
 
         logger.info(f"共获取 {len(posts)} 条微博")
-        return posts, current_since_id
+        return posts, current_since_id, reached_cutoff
 
     def _clean_html(self, html_text: str) -> str:
         """清理 HTML 标签，提取纯文本"""
@@ -1173,10 +1192,12 @@ class WeiboCrawler:
 
         posts_to_process = []
 
+        history_complete = False  # 标记历史是否已抓完（到达时间截止点）
+
         if mode in ("new", "all"):
             # 抓取新微博：从最新开始，遇到已入库的停止
             logger.info("=== 检查新微博 ===")
-            posts, _ = self.get_post_list_via_api(uid, since_id=None)
+            posts, _, _ = self.get_post_list_via_api(uid, since_id=None)
 
             for post in posts:
                 if is_post_exists(post["mid"]):
@@ -1193,14 +1214,20 @@ class WeiboCrawler:
             # 抓取历史：从最老的微博之后继续
             if oldest_mid:
                 logger.info(f"=== 继续抓取历史微博 (从 {oldest_mid} 之后) ===")
-                # 使用 oldest_mid 作为 since_id 继续向后翻页
-                history_posts, _ = self.get_post_list_via_api(uid, since_id=oldest_mid)
+                # 使用 oldest_mid 作为 since_id 继续向后翻页，检查时间范围
+                history_posts, _, reached_cutoff = self.get_post_list_via_api(
+                    uid, since_id=oldest_mid, check_date=True
+                )
 
                 for post in history_posts:
                     if not is_post_exists(post["mid"]):
                         posts_to_process.append(post)
 
                 logger.info(f"获取到 {len(history_posts)} 条历史微博")
+
+                if reached_cutoff:
+                    history_complete = True
+                    logger.info(f"✅ 博主 {uid} 的 {CRAWLER_CONFIG.get('max_days', 180)} 天内历史微博已全部抓取完成")
             else:
                 logger.info("首次抓取，无历史记录")
 

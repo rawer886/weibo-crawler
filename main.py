@@ -119,8 +119,8 @@ def cmd_progress():
 
 def main():
     parser = argparse.ArgumentParser(description="微博爬虫工具")
-    parser.add_argument("--mode", type=str, choices=["new", "history", "all"], default="new",
-                        help="抓取模式: new(新微博), history(历史微博), all(全部)")
+    parser.add_argument("--mode", type=str, choices=["new", "history", "all"], default="all",
+                        help="抓取模式: new(新微博), history(历史微博), all(全部，默认)")
     parser.add_argument("--login", action="store_true", help="仅登录并保存 cookies")
     parser.add_argument("--status", action="store_true", help="查看统计信息")
     parser.add_argument("--progress", action="store_true", help="查看抓取进度")

@@ -19,12 +19,15 @@ BLOGGER_UIDS = [
 
 # 爬虫配置
 CRAWLER_CONFIG = {
-    # 请求间隔（秒），随机范围
-    "min_delay": 3,
-    "max_delay": 8,
+    # 请求间隔（秒），随机范围 - 放慢速度，减少风控
+    "min_delay": 8,
+    "max_delay": 15,
 
-    # 每个博主最多抓取的微博数量（首次运行时）
-    "max_posts_per_blogger": 10,  # 测试阶段先设少一点
+    # 每次运行最多抓取的微博数量（断续抓取，每次少量）
+    "max_posts_per_run": 50,
+
+    # 抓取时间范围（天）- 只抓取最近 N 天的微博
+    "max_days": 180,  # 6个月
 
     # 增量抓取优化：连续遇到多少条已入库微博后停止翻页
     "stop_after_exists_count": 3,
@@ -53,7 +56,7 @@ CRAWLER_CONFIG = {
 
 # 日志配置
 LOG_CONFIG = {
-    "level": "DEBUG",  # 调试阶段使用 DEBUG
+    "level": "INFO",  # 正式运行使用 INFO
     "format": "%(asctime)s - %(levelname)s - %(message)s",
     "file": os.path.join(BASE_DIR, "crawler.log"),
 }
