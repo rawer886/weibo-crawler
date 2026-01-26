@@ -529,7 +529,14 @@ class WeiboCrawler:
                             post["repost_uid"] = str(rt_user.get("id", ""))
                             post["repost_nickname"] = rt_user.get("screen_name", "")
 
-                    # 图片
+                        # 提取原微博的图片
+                        rt_pics = rt.get("pics", [])
+                        for pic in rt_pics:
+                            large_url = pic.get("large", {}).get("url") or pic.get("url")
+                            if large_url:
+                                post["images"].append(large_url)
+
+                    # 图片（当前微博自己的图片，如果不是转发或转发时添加了新图）
                     pics = mblog.get("pics", [])
                     for pic in pics:
                         large_url = pic.get("large", {}).get("url") or pic.get("url")

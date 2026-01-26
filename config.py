@@ -7,7 +7,8 @@ import os
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # 数据目录（存放所有运行时产生的文件）
-DATA_DIR = os.path.join(BASE_DIR, "data")
+# 使用workspace共享data目录
+DATA_DIR = os.path.join(os.path.dirname(BASE_DIR), "data")
 
 # 确保数据目录存在
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -22,8 +23,8 @@ DATABASE_PATH = os.path.join(DATA_DIR, "weibo.db")
 # 获取方式: 打开博主主页，URL 中的数字就是 uid
 # 例如: https://weibo.com/u/1234567890 中的 1234567890
 BLOGGER_UIDS = [
-    "1497035431",   # 测试博主1
-    "2014433131",   # 测试博主2
+    "1497035431",   # 梁
+    "2014433131",   # 唐
 ]
 
 # 爬虫配置
@@ -44,7 +45,7 @@ CRAWLER_CONFIG = {
     "max_comments_per_post": 10,
 
     # 微博发布多少天后才抓取评论（让评论稳定下来）
-    "comment_delay_days": 3,
+    "comment_delay_days": 1,
 
     # 是否只抓取热门评论
     "hot_comments_only": True,
