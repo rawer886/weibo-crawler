@@ -19,19 +19,10 @@ os.makedirs(os.path.join(DATA_DIR, "logs"), exist_ok=True)
 # 数据库配置
 DATABASE_PATH = os.path.join(DATA_DIR, "weibo.db")
 
-# 要关注的博主列表 (填入博主的 uid)
-# 获取方式: 打开博主主页，URL 中的数字就是 uid
-# 例如: https://weibo.com/u/1234567890 中的 1234567890
-BLOGGER_UIDS = [
-    "1497035431",   # 梁
-    "2014433131",   # 唐
-]
-
 # 爬虫配置
 CRAWLER_CONFIG = {
-    # 请求间隔（秒），随机范围 - 放慢速度，减少风控
-    "min_delay": 8,
-    "max_delay": 30,
+    # 抓取间隔（秒）- 每条微博之间的等待时间，实际会在此基础上随机浮动
+    "delay": 15, # 建议值: 10-30秒，太快容易被风控
 
     # 每次运行最多抓取的微博数量（断续抓取，每次少量）
     "max_posts_per_run": 50,
