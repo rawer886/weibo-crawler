@@ -16,6 +16,7 @@ class Colors:
     CYAN = '\033[96m'
     YELLOW = '\033[93m'
     DIM = '\033[2m'
+    GRAY = '\033[90m'
     RESET = '\033[0m'
 
 
@@ -77,21 +78,19 @@ def display_comments(comments: list):
         is_blogger = comment.get('is_blogger_reply', False)
         nickname = comment.get('nickname') or comment.get('uid') or '未知用户'
 
+        # 用户名：博主高亮黄色，普通用户浅灰色
         if is_blogger:
             user_info = f"{Colors.YELLOW}{nickname}🔥{Colors.RESET}"
         else:
-            user_info = f"{Colors.CYAN}{nickname}{Colors.RESET}"
+            user_info = f"{Colors.GRAY}{nickname}{Colors.RESET}"
 
-        likes_info = f"👍 {comment.get('likes_count', 0)}"
+        likes_info = f"点赞数 {comment.get('likes_count', 0)}"
         time_info = comment.get('created_at', '未知')
 
         if level == 0:
-            print(f"{indent}[{floor_number}] {user_info}: {comment.get('content', '')} ({time_info} {likes_info})")
+            print(f"{indent}[{floor_number}] {user_info}: {comment.get('content', '')} {Colors.GRAY}({time_info} {likes_info}){Colors.RESET}")
         else:
-            reply_to_info = ""
-            if comment.get('reply_to_nickname'):
-                reply_to_info = f"→@{Colors.CYAN}{comment['reply_to_nickname']}{Colors.RESET} "
-            print(f"{indent}  ↳ {user_info} {reply_to_info}: {comment.get('content', '')} ({time_info} {likes_info})")
+            print(f"{indent}      ↳ {user_info}: {comment.get('content', '')} {Colors.GRAY}({time_info} {likes_info}){Colors.RESET}")
 
         comment_id = comment.get('comment_id')
         if comment_id and comment_id in replies_map:
@@ -117,11 +116,11 @@ def display_blogger_comment(comment: dict, index: int, total: int):
     post_content = truncate_text(comment.get('post_content', ''), 100)
     post_time = comment.get('post_created_at') or "未知"
     comment_time = comment.get('created_at') or "未知"
-    likes_info = f"👍 {comment.get('likes_count', 0)}"
+    likes_info = f"点赞数 {comment.get('likes_count', 0)}"
 
     print(f"[{index}/{total}] 微博ID: {comment['mid']}")
     print(f"  📝 {post_content} {Colors.DIM}[{post_time}]{Colors.RESET}")
-    print(f"  💬 {Colors.YELLOW}{comment.get('content', '')}{Colors.RESET}  {likes_info} {Colors.DIM}[{comment_time}]{Colors.RESET}")
+    print(f"  💬 {Colors.YELLOW}{comment.get('content', '')}{Colors.RESET}  {Colors.DIM}{likes_info} [{comment_time}]{Colors.RESET}")
 
     if comment.get('reply_to_comment_id'):
         reply_to_nickname = comment.get('reply_to_nickname')
@@ -134,16 +133,30 @@ def display_blogger_comment(comment: dict, index: int, total: int):
             print(f"  {Colors.CYAN}↳ 回复 {reply_to_info}{Colors.RESET}")
 
 
-def print_crawl_stats(stats: dict):
+def print_crawl_stats(stats: dict, post: dict = None):
     """打印抓取统计结果"""
     print("-" * 50)
+    print()
     print("抓取完成:")
-    print(f"  微博: {'已保存' if stats['post_saved'] else '已存在'}")
-    print(f"  评论: 新增 {stats['comments_saved']} 条，更新 {stats['comments_updated']} 条")
+    print(f"  微博: {'新增' if stats['post_saved'] else '已存在'}")
+
+    # 展示微博正文和互动数据
+    if post:
+        content = truncate_text(post.get('content', ''), 80)
+        if content:
+            print(f"  正文: {Colors.CYAN}{content}{Colors.RESET}")
+        images = post.get('images', [])
+        if images:
+            print(f"  图片: {len(images)} 张")
+        reposts = post.get('reposts_count', 0)
+        comments = post.get('comments_count', 0)
+        likes = post.get('likes_count', 0)
+        print(f"  互动: 点赞 {likes} | 转发 {reposts} | 评论 {comments}")
+
     if stats['images_downloaded'] > 0:
-        print(f"  微博图片: {stats['images_downloaded']} 张")
+        print(f"  微博图片下载: {stats['images_downloaded']} 张")
     if stats['comment_images_downloaded'] > 0:
-        print(f"  评论图片: {stats['comment_images_downloaded']} 张")
+        print(f"  评论图片下载: {stats['comment_images_downloaded']} 张")
 
 
 def show_db_status():

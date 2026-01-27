@@ -35,14 +35,26 @@ class APICache:
         key_hash = hashlib.md5(key.encode()).hexdigest()
         return os.path.join(self.cache_dir, f"{key_hash}.json")
 
-    def get(self, key: str) -> Optional[dict]:
-        """获取缓存，不存在返回 None"""
+    def get(self, key: str, max_age: float = None) -> Optional[dict]:
+        """获取缓存，不存在或已过期返回 None
+
+        参数:
+            key: 缓存键
+            max_age: 最大缓存时间（秒），None 表示永不过期
+        """
         cache_path = self._get_cache_path(key)
         if not os.path.exists(cache_path):
             return None
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
                 cached = json.load(f)
+
+            # 检查缓存是否过期
+            if max_age is not None:
+                cached_at = cached.get("_cached_at", 0)
+                if time.time() - cached_at > max_age:
+                    return None
+
             return cached.get("data")
         except Exception:
             return None
@@ -112,12 +124,21 @@ class WeiboAPI:
 
         return None
 
-    def _fetch_with_cache(self, url: str, cache_key: str) -> Optional[dict]:
-        """带缓存的 API 请求"""
-        is_first_page = cache_key.endswith("_first")
+    def _fetch_with_cache(self, url: str, cache_key: str, max_age: float = None) -> Optional[dict]:
+        """带缓存的 API 请求
 
-        if not is_first_page:
-            cached = self.cache.get(cache_key)
+        参数:
+            url: 请求 URL
+            cache_key: 缓存键
+            max_age: 缓存策略:
+                - None: 使用永久缓存
+                - 0: 跳过缓存读取（仍会写入）
+                - >0: 缓存有效期（秒）
+        """
+        skip_cache_read = max_age == 0
+        if not skip_cache_read:
+            effective_max_age = max_age if max_age and max_age > 0 else None
+            cached = self.cache.get(cache_key, max_age=effective_max_age)
             if cached is not None:
                 logger.info(f"命中缓存: {cache_key}")
                 return cached
@@ -137,8 +158,18 @@ class WeiboAPI:
             return None
 
     def get_post_list(self, uid: str, since_id: str = None, max_count: int = None,
-                      check_date: bool = False) -> Tuple[List[dict], str, bool]:
+                      check_date: bool = False, cache_max_age: float = None) -> Tuple[List[dict], str, bool]:
         """获取微博列表
+
+        参数:
+            uid: 博主 ID
+            since_id: 从此 ID 开始向更早的方向获取
+            max_count: 最大获取数量
+            check_date: 是否检查时间范围
+            cache_max_age: 缓存策略:
+                - None: 使用永久缓存（默认）
+                - 0: 跳过缓存读取（仍会写入）
+                - >0: 缓存有效期（秒）
 
         返回: (微博列表, 下一页since_id, 是否到达时间截止点)
         """
@@ -157,13 +188,13 @@ class WeiboAPI:
             if current_since_id:
                 url += f"&since_id={current_since_id}"
 
-            is_first_page = current_since_id is None
             cache_key = f"posts_{uid}_{current_since_id or 'first'}"
 
-            try:
-                logger.info(f"获取第 {page} 页微博列表..." + (" (不缓存)" if is_first_page else ""))
-                data = self._fetch_with_cache(url, cache_key)
+            cache_hint = self._format_cache_hint(cache_max_age)
+            logger.info(f"获取第 {page} 页微博列表{cache_hint}")
+            data = self._fetch_with_cache(url, cache_key, max_age=cache_max_age)
 
+            try:
                 if not data or data.get("ok") != 1:
                     break
 
@@ -186,8 +217,8 @@ class WeiboAPI:
                     # 检查时间范围
                     if check_date and post["created_at"]:
                         try:
-                            post_date = datetime.fromisoformat(post["created_at"].replace("Z", "+00:00"))
-                            if post_date.replace(tzinfo=None) < cutoff_date:
+                            post_date = datetime.strptime(post["created_at"], "%y-%m-%d %H:%M")
+                            if post_date < cutoff_date:
                                 logger.info(f"微博 {mid} 已超出 {max_days} 天范围，停止抓取")
                                 reached_cutoff = True
                                 break
@@ -261,6 +292,14 @@ class WeiboAPI:
 
         return post
 
+    def _format_cache_hint(self, cache_max_age: float) -> str:
+        """格式化缓存提示信息"""
+        if cache_max_age == 0:
+            return "（不使用缓存）"
+        if cache_max_age is not None and cache_max_age > 0:
+            return f"（缓存有效期: {cache_max_age/3600:.0f}h）"
+        return ""
+
     def _clean_html(self, html_text: str) -> str:
         """清理 HTML 标签"""
         if not html_text:
@@ -271,42 +310,61 @@ class WeiboAPI:
         return text.strip()
 
     def _parse_weibo_time(self, time_str: str) -> str:
-        """解析微博时间字符串"""
+        """解析微博时间字符串，统一输出为 YY-MM-DD HH:MM 格式"""
         if not time_str:
             return ""
 
         now = datetime.now()
+        dt = None
 
         try:
             if "刚刚" in time_str:
-                return now.isoformat()
+                dt = now
 
-            match = re.search(r'(\d+)\s*分钟前', time_str)
-            if match:
-                minutes = int(match.group(1))
-                return (now - timedelta(minutes=minutes)).isoformat()
+            if not dt:
+                match = re.search(r'(\d+)\s*分钟前', time_str)
+                if match:
+                    dt = now - timedelta(minutes=int(match.group(1)))
 
-            match = re.search(r'(\d+)\s*小时前', time_str)
-            if match:
-                hours = int(match.group(1))
-                return (now - timedelta(hours=hours)).isoformat()
+            if not dt:
+                match = re.search(r'(\d+)\s*小时前', time_str)
+                if match:
+                    dt = now - timedelta(hours=int(match.group(1)))
 
-            match = re.search(r'昨天\s*(\d{1,2}):(\d{2})', time_str)
-            if match:
-                hour, minute = int(match.group(1)), int(match.group(2))
-                yesterday = now - timedelta(days=1)
-                return yesterday.replace(hour=hour, minute=minute, second=0).isoformat()
+            if not dt:
+                match = re.search(r'昨天\s*(\d{1,2}):(\d{2})', time_str)
+                if match:
+                    yesterday = now - timedelta(days=1)
+                    dt = yesterday.replace(
+                        hour=int(match.group(1)),
+                        minute=int(match.group(2)),
+                        second=0
+                    )
 
-            match = re.match(r'^(\d{1,2})-(\d{1,2})$', time_str.strip())
-            if match:
-                month, day = int(match.group(1)), int(match.group(2))
-                return now.replace(month=month, day=day, hour=0, minute=0, second=0).isoformat()
+            if not dt:
+                match = re.match(r'^(\d{1,2})-(\d{1,2})$', time_str.strip())
+                if match:
+                    dt = now.replace(
+                        month=int(match.group(1)),
+                        day=int(match.group(2)),
+                        hour=0, minute=0, second=0
+                    )
 
-            try:
-                dt = datetime.strptime(time_str, "%a %b %d %H:%M:%S %z %Y")
-                return dt.isoformat()
-            except:
-                pass
+            # 已经是 YY-MM-DD HH:MM 格式，直接返回
+            if not dt:
+                match = re.match(r'^(\d{2})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$', time_str.strip())
+                if match:
+                    return time_str
+
+            if not dt:
+                try:
+                    dt = datetime.strptime(time_str, "%a %b %d %H:%M:%S %z %Y")
+                    dt = dt.replace(tzinfo=None)
+                except:
+                    pass
+
+            if dt:
+                return dt.strftime("%y-%m-%d %H:%M")
 
             return time_str
         except Exception as e:

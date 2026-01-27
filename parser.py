@@ -53,7 +53,7 @@ class PageParser:
 
         raise ValueError("无法从 DOM 解析数字 mid")
 
-    def parse_post(self, uid: str, mid: str) -> Optional[dict]:
+    def parse_post(self, uid: str, mid: str, source_url: str = None) -> Optional[dict]:
         """从详情页解析微博信息"""
         logger.info(f"从详情页解析微博信息: {mid}")
 
@@ -92,30 +92,35 @@ class PageParser:
                 "repost_uid": post_data.get("repost_uid", ""),
                 "repost_nickname": post_data.get("repost_nickname", ""),
                 "images": post_data.get("images", []),
-                "source_url": f"https://weibo.com/{uid}/{mid}",
+                "source_url": source_url or f"https://weibo.com/{uid}/{mid}",
             }
 
-            repost_info = ""
-            if post["is_repost"]:
-                repost_info = f", 转发自={post['repost_nickname'] or '未知'}({post['repost_uid'] or '?'})"
-            logger.info(f"解析成功: 内容长度={len(post['content'])}, 转发={post['reposts_count']}, "
-                       f"评论={post['comments_count']}, 点赞={post['likes_count']}, 图片={len(post['images'])}张{repost_info}")
+            log_msg = (f"解析成功: 内容长度={len(post['content'])}, 转发={post['reposts_count']}, "
+                       f"评论={post['comments_count']}, 点赞={post['likes_count']}, 图片={len(post['images'])}张")
+            if post["is_repost"] and (post['repost_nickname'] or post['repost_uid']):
+                log_msg += f", 转发自={post['repost_nickname'] or '未知'}({post['repost_uid'] or '?'})"
+            logger.info(log_msg)
             return post
 
         except Exception as e:
             logger.warning(f"解析微博详情失败: {e}")
             return None
 
-    def parse_comments(self, mid: str, blogger_uid: str) -> list:
-        """解析评论列表"""
+    def parse_comments(self, mid: str, blogger_uid: str) -> tuple:
+        """解析评论列表
+
+        返回:
+            (comments, main_count): 评论列表和主评论容器数
+        """
         comments = []
+        main_count = 0
 
         try:
             self.page.wait_for_load_state("domcontentloaded", timeout=15000)
 
             # 新版评论结构
             main_items = self.page.locator('.wbpro-list .item1').all()
-            logger.info(f"找到 {len(main_items)} 条主评论容器")
+            main_count = len(main_items)
 
             for item in main_items:
                 main_con = item.locator('.con1').first
@@ -139,8 +144,7 @@ class PageParser:
         except Exception as e:
             logger.warning(f"评论解析失败: {e}")
 
-        logger.info(f"获取到 {len(comments)} 条评论")
-        return comments
+        return comments, main_count
 
     def _parse_comment_element(self, elem, mid: str, blogger_uid: str,
                                 is_sub: bool = False, parent: dict = None) -> Optional[dict]:
@@ -262,46 +266,61 @@ class PageParser:
                   .replace("/thumb180/", "/large/")
 
     def _parse_weibo_time(self, time_str: str) -> str:
-        """解析微博时间字符串"""
+        """解析微博时间字符串，统一输出为 YY-MM-DD HH:MM 格式"""
         if not time_str:
             return ""
 
         now = datetime.now()
+        dt = None
 
         try:
             if "刚刚" in time_str:
-                return now.isoformat()
+                dt = now
 
-            match = re.search(r'(\d+)\s*分钟前', time_str)
-            if match:
-                return (now - timedelta(minutes=int(match.group(1)))).isoformat()
+            if not dt:
+                match = re.search(r'(\d+)\s*分钟前', time_str)
+                if match:
+                    dt = now - timedelta(minutes=int(match.group(1)))
 
-            match = re.search(r'(\d+)\s*小时前', time_str)
-            if match:
-                return (now - timedelta(hours=int(match.group(1)))).isoformat()
+            if not dt:
+                match = re.search(r'(\d+)\s*小时前', time_str)
+                if match:
+                    dt = now - timedelta(hours=int(match.group(1)))
 
-            match = re.search(r'昨天\s*(\d{1,2}):(\d{2})', time_str)
-            if match:
-                yesterday = now - timedelta(days=1)
-                return yesterday.replace(
-                    hour=int(match.group(1)),
-                    minute=int(match.group(2)),
-                    second=0
-                ).isoformat()
+            if not dt:
+                match = re.search(r'昨天\s*(\d{1,2}):(\d{2})', time_str)
+                if match:
+                    yesterday = now - timedelta(days=1)
+                    dt = yesterday.replace(
+                        hour=int(match.group(1)),
+                        minute=int(match.group(2)),
+                        second=0
+                    )
 
-            match = re.match(r'^(\d{1,2})-(\d{1,2})$', time_str.strip())
-            if match:
-                return now.replace(
-                    month=int(match.group(1)),
-                    day=int(match.group(2)),
-                    hour=0, minute=0, second=0
-                ).isoformat()
+            if not dt:
+                match = re.match(r'^(\d{1,2})-(\d{1,2})$', time_str.strip())
+                if match:
+                    dt = now.replace(
+                        month=int(match.group(1)),
+                        day=int(match.group(2)),
+                        hour=0, minute=0, second=0
+                    )
 
-            try:
-                dt = datetime.strptime(time_str, "%a %b %d %H:%M:%S %z %Y")
-                return dt.isoformat()
-            except:
-                pass
+            # 已经是 YY-MM-DD HH:MM 格式，直接返回
+            if not dt:
+                match = re.match(r'^(\d{2})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$', time_str.strip())
+                if match:
+                    return time_str
+
+            if not dt:
+                try:
+                    dt = datetime.strptime(time_str, "%a %b %d %H:%M:%S %z %Y")
+                    dt = dt.replace(tzinfo=None)
+                except:
+                    pass
+
+            if dt:
+                return dt.strftime("%y-%m-%d %H:%M")
 
             return time_str
         except:

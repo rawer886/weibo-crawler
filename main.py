@@ -3,11 +3,12 @@
 微博爬虫 - 命令行入口
 
 用法:
-    python main.py https://weibo.com/1497035431/AbCdEfGhI      # 抓取单条微博
-    python main.py https://weibo.com/u/1497035431             # 批量抓取用户微博
-    python main.py https://weibo.com/u/1497035431 --mode new  # 抓取最新微博
-    python main.py --status                                   # 查看统计信息
-    python main.py --recent                                   # 查看最近抓取
+    python main.py https://weibo.com/1497035431/AbCdEfGhI       # 抓取单条微博
+    python main.py https://weibo.com/u/1497035431              # 批量抓取用户微博
+    python main.py https://weibo.com/u/1497035431 --mode new   # 抓取最新微博
+    python main.py https://weibo.com/u/1497035431 --mode sync  # 同步校验缺失微博
+    python main.py --status                                    # 查看统计信息
+    python main.py --recent                                    # 查看最近抓取
 """
 import argparse
 import sys
@@ -45,14 +46,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python main.py https://weibo.com/1497035431/AbCdEfGhI      # 抓取单条微博
-  python main.py https://weibo.com/u/1497035431             # 批量抓取用户微博
-  python main.py https://weibo.com/u/1497035431 --mode new  # 抓取用户最新微博
+  python main.py https://weibo.com/1497035431/AbCdEfGhI       # 抓取单条微博
+  python main.py https://weibo.com/u/1497035431              # 批量抓取用户微博
+  python main.py https://weibo.com/u/1497035431 --mode new   # 抓取用户最新微博
+  python main.py https://weibo.com/u/1497035431 --mode sync  # 同步校验缺失微博
         """
     )
     parser.add_argument("url", nargs="?", help="微博 URL（用户主页或单条微博）")
-    parser.add_argument("--mode", choices=["new", "history"], default="history",
-                        help="抓取模式: history(稳定微博), new(最新微博)")
+    parser.add_argument("--mode", choices=["new", "history", "sync"], default="history",
+                        help="抓取模式: history(稳定微博), new(最新微博), sync(同步校验缺失)")
     parser.add_argument("--status", action="store_true", help="查看统计信息")
     parser.add_argument("--recent", action="store_true", help="查看最近抓取的微博")
 
