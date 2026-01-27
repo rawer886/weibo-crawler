@@ -17,7 +17,7 @@ from config import CRAWLER_CONFIG, LOG_CONFIG
 from database import (
     init_database, save_blogger, save_post, save_comment,
     is_post_exists, get_blogger_oldest_mid, get_blogger_newest_mid,
-    update_crawl_progress, update_post_local_images,
+    update_crawl_progress, update_post_local_images, update_post_repost_local_images,
     set_comment_pending, get_pending_comment_posts,
     clear_comment_pending, clear_comments_for_post,
     update_comment_likes
@@ -61,8 +61,6 @@ class WeiboCrawler:
     """微博爬虫"""
 
     def __init__(self):
-        init_database()
-
         self.browser = BrowserManager()
         self.api = WeiboAPI()
         self.parser = None  # 需要 page 初始化
@@ -106,6 +104,7 @@ class WeiboCrawler:
                 "comments_saved": 0,
                 "comments_updated": 0,
                 "images_downloaded": 0,
+                "repost_images_downloaded": 0,
                 "comment_images_downloaded": 0,
                 "mark_pending": False
             }
@@ -136,7 +135,7 @@ class WeiboCrawler:
             try:
                 stable_days = CRAWLER_CONFIG.get("stable_days", 1)
                 stable_cutoff = datetime.now() - timedelta(days=stable_days)
-                post_date = datetime.strptime(post["created_at"], "%y-%m-%d %H:%M")
+                post_date = datetime.strptime(post["created_at"], "%Y-%m-%d %H:%M")
                 if post_date > stable_cutoff:
                     mark_pending = True
                     logger.info(f"微博发布不足 {stable_days} 天，评论将标记为待更新")
@@ -159,18 +158,25 @@ class WeiboCrawler:
                 result["stats"]["images_downloaded"] = len(local_paths)
                 if local_paths:
                     update_post_local_images(mid, local_paths)
+
+            # 5. 下载原微博图片（如果是转发）
+            if post.get("repost_images"):
+                repost_local_paths = self.image_downloader.download_repost_images(post)
+                result["stats"]["repost_images_downloaded"] = len(repost_local_paths)
+                if repost_local_paths:
+                    update_post_repost_local_images(mid, repost_local_paths)
         else:
             logger.warning(f"微博内容为空，跳过保存: {mid}")
 
         print()
 
-        # 5. 滚动并点击「按热度」
+        # 6. 滚动并点击「按热度」
         if self._scroll_and_click_hot_button():
             time.sleep(2)
 
         time.sleep(5)
 
-        # 6. 抓取评论（两轮）
+        # 7. 抓取评论（两轮）
         print()
         all_comments = {}
         comments, main_count = self.parser.parse_comments(mid, uid)
@@ -179,7 +185,7 @@ class WeiboCrawler:
                 all_comments[c["comment_id"]] = c
         logger.info(f"第 1 轮抓取: 获取 {len(comments)} 条评论, 其中 {main_count} 个主评论")
 
-        # 7. 滚动后再抓一轮
+        # 8. 滚动后再抓一轮
         if comments:
             viewport_height = self.browser.page.evaluate("() => window.innerHeight")
             scroll_distance = int(viewport_height * random.uniform(0.8, 1.0))
@@ -195,7 +201,7 @@ class WeiboCrawler:
                     new_count += 1
             logger.info(f"第 2 轮抓取: 新增 {new_count} 条，共获取 {len(comments)} 条评论，其中 {main_count} 个主评论")
 
-        # 8. 保存评论
+        # 9. 保存评论
         comments = list(all_comments.values())
         result["comments"] = comments
         print()
@@ -225,20 +231,22 @@ class WeiboCrawler:
         elif updated_count > 0:
             logger.info(f"未新增评论，更新 {updated_count} 条点赞数")
 
-        # 9. 标记待更新（只看时间，不看评论数量）
+        # 10. 标记待更新（只看时间，不看评论数量）
         if mark_pending:
             set_comment_pending(mid, True)
             result["stats"]["mark_pending"] = True
 
+        logger.info(f"微博 {mid} 抓取结束")
+        logger.info("-" * 50)
         return result
 
     def _parse_post_date(self, post: dict) -> datetime:
-        """解析微博发布时间（YY-M-D HH:MM 格式），返回 None 如果解析失败"""
+        """解析微博发布时间（YYYY-MM-DD HH:MM 格式），返回 None 如果解析失败"""
         created_at = post.get("created_at")
         if not created_at:
             return None
         try:
-            return datetime.strptime(created_at, "%y-%m-%d %H:%M")
+            return datetime.strptime(created_at, "%Y-%m-%d %H:%M")
         except Exception:
             return None
 
@@ -252,12 +260,11 @@ class WeiboCrawler:
                 - "new": 抓取最新微博（stable_days 内，不使用缓存）
                 - "sync": 同步校验缺失微博（使用 24h 缓存）
         """
-        logger.info(f"开始抓取博主: {uid}, 模式: {mode}")
-
         stable_days = CRAWLER_CONFIG.get("stable_days", 1)
         stable_cutoff = datetime.now() - timedelta(days=stable_days)
 
         # 获取博主信息
+        logger.info(f"开始抓取博主: {uid}, 模式: {mode}")
         blogger_info = self.api.get_blogger_info(uid)
         if not blogger_info:
             logger.error(f"无法获取博主信息: {uid}")
@@ -317,11 +324,10 @@ class WeiboCrawler:
             self._update_pending_comments(uid, stable_days)
 
             # 抓取稳定微博（使用永久缓存，从断点续抓）
-            logger.info(f"=== 抓取稳定微博（发布超过 {stable_days} 天） ===")
             if oldest_mid:
-                logger.info(f"从断点继续: {oldest_mid}")
+                logger.info(f"从断点继续: {oldest_mid}\n")
             else:
-                logger.info("首次抓取，从头开始")
+                logger.info("首次抓取，从头开始\n")
 
             posts, _, reached_cutoff = self.api.get_post_list(uid, since_id=oldest_mid, check_date=True)
 
@@ -337,7 +343,8 @@ class WeiboCrawler:
                 posts_to_process.append(post)
 
             if posts_to_process:
-                logger.info(f"获取到 {len(posts_to_process)} 条稳定微博")
+                logger.info(f"获取到 {len(posts_to_process)} 条稳定微博\n")
+                logger.info("-" * 50)
 
             if reached_cutoff:
                 logger.info(f"博主 {uid} 的历史微博已全部抓取完成")
