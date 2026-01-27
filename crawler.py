@@ -49,7 +49,9 @@ from database import (
     is_post_exists, init_database,
     get_blogger_oldest_mid, get_blogger_newest_mid,
     update_crawl_progress, get_crawl_progress,
-    get_post_comment_count, update_post_local_images
+    get_post_comment_count, update_post_local_images,
+    set_comment_pending, get_pending_comment_posts,
+    clear_comment_pending, clear_comments_for_post
 )
 
 
@@ -117,6 +119,9 @@ class WeiboCrawler:
     """微博爬虫类"""
 
     def __init__(self):
+        # 初始化数据库（确保表结构是最新的）
+        init_database()
+
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
         self.playwright = None
@@ -221,6 +226,100 @@ class WeiboCrawler:
 
         return local_paths
 
+    def download_comment_images(self, comment: dict, post_uid: str) -> list:
+        """
+        下载评论图片到本地（优先从浏览器缓存获取）
+
+        目录结构: images/{uid}/{YYYY-MM-DD}/comment_{comment_id}_{index}.jpg
+        命名区分：评论图片以 "comment_" 前缀区分于正文图片
+
+        返回: 本地文件路径列表
+        """
+        if not CRAWLER_CONFIG.get("download_images", False):
+            return []
+
+        images = comment.get("images", [])
+        if not images:
+            return []
+
+        comment_id = comment["comment_id"]
+        created_at = comment.get("created_at", "")
+
+        # 解析日期，用于创建目录
+        try:
+            if "-" in created_at:
+                # 格式: "26-1-23" -> "2026-01-23"
+                parts = created_at.split()[0].split("-")
+                if len(parts) == 3:
+                    year = parts[0] if len(parts[0]) == 4 else f"20{parts[0]}"
+                    month = parts[1].zfill(2)
+                    day = parts[2].zfill(2)
+                    date_str = f"{year}-{month}-{day}"
+                else:
+                    date_str = datetime.now().strftime("%Y-%m-%d")
+            else:
+                date_str = datetime.now().strftime("%Y-%m-%d")
+        except:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+
+        # 创建目录: images/{uid}/{date}/
+        save_dir = os.path.join(
+            CRAWLER_CONFIG.get("images_dir", "images"),
+            post_uid,
+            date_str
+        )
+        os.makedirs(save_dir, exist_ok=True)
+
+        local_paths = []
+
+        for i, img_url in enumerate(images):
+            try:
+                ext = ".jpg"
+                if ".png" in img_url.lower():
+                    ext = ".png"
+                elif ".gif" in img_url.lower():
+                    ext = ".gif"
+                elif ".webp" in img_url.lower():
+                    ext = ".webp"
+
+                # 评论图片命名：comment_{comment_id}_{index}{ext}
+                filename = f"comment_{comment_id}_{i+1}{ext}"
+                filepath = os.path.join(save_dir, filename)
+
+                if os.path.exists(filepath):
+                    logger.debug(f"评论图片已存在: {filename}")
+                    local_paths.append(filepath)
+                    continue
+
+                # 尝试从浏览器获取图片
+                img_data = self._get_image_from_browser(img_url)
+
+                if img_data:
+                    with open(filepath, "wb") as f:
+                        f.write(img_data)
+                    local_paths.append(filepath)
+                    logger.debug(f"评论图片已保存（浏览器缓存）: {filename}")
+                else:
+                    # 回退到 HTTP 请求
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                        "Referer": "https://weibo.com/"
+                    }
+                    resp = requests.get(img_url, headers=headers, timeout=30)
+                    if resp.status_code == 200:
+                        with open(filepath, "wb") as f:
+                            f.write(resp.content)
+                        local_paths.append(filepath)
+                        logger.debug(f"评论图片已保存（HTTP）: {filename}")
+
+            except Exception as e:
+                logger.warning(f"下载评论图片失败: {e}")
+
+        if local_paths:
+            logger.info(f"下载了 {len(local_paths)} 张评论图片到 {save_dir}")
+
+        return local_paths
+
     def _get_image_from_browser(self, img_url: str) -> Optional[bytes]:
         """从浏览器获取已加载的图片数据"""
         import base64
@@ -264,14 +363,43 @@ class WeiboCrawler:
 
         return None
 
-    def start(self):
-        """启动浏览器"""
+    def start(self, url: str = None):
+        """启动浏览器
+
+        参数:
+            url: 可选，启动后直接访问的URL
+        """
         logger.info("启动浏览器...")
         self.playwright = sync_playwright().start()
+
+        # 获取屏幕可用区域（排除菜单栏和Dock）
+        viewport_height = 900   # 默认高度
+        viewport_width = 720    # 默认宽度（屏幕一半）
+        try:
+            # 尝试使用 screeninfo 获取显示器尺寸
+            from screeninfo import get_monitors
+            monitors = get_monitors()
+            if monitors:
+                primary = monitors[0]
+                # macOS: 菜单栏约25px，Dock约70px，窗口标题栏约28px，留些边距
+                viewport_height = primary.height - 130
+                viewport_width = primary.width // 2  # 屏幕宽度的一半
+                logger.info(f"检测到显示器: {primary.width}x{primary.height}, 设置视口: {viewport_width}x{viewport_height}")
+        except ImportError:
+            logger.debug("screeninfo 未安装，使用默认视口大小")
+        except Exception as e:
+            logger.debug(f"获取显示器尺寸失败: {e}，使用默认视口大小")
+
+        # 启动浏览器，窗口靠左侧显示
         self.browser = self.playwright.chromium.launch(
-            headless=CRAWLER_CONFIG["headless"]
+            headless=CRAWLER_CONFIG["headless"],
+            args=[
+                f"--window-size={viewport_width},{viewport_height + 28}",  # 加上标题栏高度
+                "--window-position=0,25",  # 左上角，菜单栏下方
+            ]
         )
-        self.page = self.browser.new_page()
+
+        self.page = self.browser.new_page(viewport={"width": viewport_width, "height": viewport_height})
 
         # 设置更真实的 User-Agent
         self.page.set_extra_http_headers({
@@ -280,6 +408,11 @@ class WeiboCrawler:
 
         # 尝试加载已保存的 cookies
         self._load_cookies()
+
+        # 如果指定了URL，直接访问
+        if url:
+            logger.info(f"访问页面: {url}")
+            self.page.goto(url)
 
     def stop(self):
         """关闭浏览器"""
@@ -347,20 +480,51 @@ class WeiboCrawler:
         return False
 
     def check_login_status(self) -> bool:
-        """检查当前登录状态"""
+        """检查当前登录状态
+
+        在当前页面检查登录状态，不跳转到其他页面
+        """
         logger.info("检查登录状态...")
-        self.page.goto("https://weibo.com")
-        self._random_delay(2, 3)
 
         try:
+            # 如果当前不在微博页面，先访问微博
+            current_url = self.page.url
+            if not current_url or "weibo.com" not in current_url:
+                self.page.goto("https://weibo.com")
+                self._random_delay(2, 3)
+
             self.page.wait_for_load_state("networkidle", timeout=15000)
+
+            # 检查是否被重定向到登录页
             if "login" in self.page.url.lower() or "passport" in self.page.url.lower():
                 self.is_logged_in = False
                 return False
+
+            # 检查页面是否有登录用户的特征（头像或用户名）
+            try:
+                # 微博详情页/首页都有用户头像
+                user_avatar = self.page.locator('[class*="avatar"]').first
+                if user_avatar.count() > 0:
+                    self.is_logged_in = True
+                    self._save_cookies()
+                    return True
+            except:
+                pass
+
+            # 备用检查：查看是否有登录按钮
+            try:
+                login_btn = self.page.locator('text="登录"').first
+                if login_btn.count() > 0 and login_btn.is_visible(timeout=1000):
+                    self.is_logged_in = False
+                    return False
+            except:
+                pass
+
+            # 默认认为已登录（页面正常加载且无登录按钮）
             self.is_logged_in = True
-            # 登录状态有效时，更新保存 cookies（保持会话活跃）
             self._save_cookies()
             return True
+
         except Exception as e:
             logger.warning(f"检查登录状态失败: {e}")
             return False
@@ -687,27 +851,305 @@ class WeiboCrawler:
 
         return None
 
-    def get_comments(self, uid: str, mid: str, target_count: int = None) -> list:
+    def parse_post_from_detail_page(self, uid: str, mid: str) -> Optional[dict]:
+        """从当前已加载的详情页解析微博信息
+
+        注意：调用此方法前需要确保页面已经加载完成
+
+        参数:
+            uid: 博主ID
+            mid: 微博ID（数字格式）
+
+        返回:
+            微博信息字典，解析失败返回 None
+        """
+        logger.info(f"从详情页解析微博信息: {mid}")
+
+        try:
+            # 智能等待：确保页面完全加载
+            logger.debug("等待页面网络活动结束...")
+            try:
+                self.page.wait_for_load_state("networkidle", timeout=10000)
+            except:
+                logger.debug("等待networkidle超时，继续解析")
+
+            # 等待关键元素加载
+            logger.debug("等待微博内容元素加载...")
+            try:
+                # 等待正文或工具栏元素出现
+                self.page.wait_for_selector('[class*="detail_wbtext"], [class*="toolbar"], footer',
+                                            timeout=5000, state="attached")
+                logger.debug("关键元素已加载")
+            except:
+                logger.debug("等待关键元素超时，尝试继续解析")
+
+            # 从 DOM 提取微博数据
+            post_data = self.page.evaluate("""
+                () => {
+                    const result = {
+                        content: '',
+                        created_at: '',
+                        reposts_count: 0,
+                        comments_count: 0,
+                        likes_count: 0,
+                        images: []
+                    };
+
+                    // 获取正文内容
+                    const contentSelectors = [
+                        '[class*="_wbtext_"]',
+                        '.wbpro-feed-ogText [class*="_wbtext_"]',
+                        '[class*="detail_wbtext"]',
+                        '.wbpro-feed-content',
+                        '[class*="WB_text"]',
+                        '[class*="weibo-text"]'
+                    ];
+                    for (const selector of contentSelectors) {
+                        const elem = document.querySelector(selector);
+                        if (elem) {
+                            result.content = elem.textContent.trim();
+                            if (result.content) break;
+                        }
+                    }
+
+                    // 获取发布时间
+                    const timeSelectors = [
+                        '[class*="_time_"]',
+                        '[class*="head-info_time"]',
+                        '[class*="created_at"]',
+                        'time',
+                        '[class*="WB_from"] a'
+                    ];
+                    for (const selector of timeSelectors) {
+                        const elem = document.querySelector(selector);
+                        if (elem) {
+                            result.created_at = elem.textContent.trim();
+                            if (result.created_at) break;
+                        }
+                    }
+
+                    // 获取互动数据（点赞、转发、评论）
+                    // 优先从 footer 的 aria-label 属性获取（格式: "126,490,5489" 表示转发,评论,点赞）
+                    const footer = document.querySelector('footer[aria-label]');
+                    if (footer) {
+                        const ariaLabel = footer.getAttribute('aria-label');
+                        if (ariaLabel) {
+                            const parts = ariaLabel.split(',');
+                            if (parts.length >= 3) {
+                                result.reposts_count = parseInt(parts[0]) || 0;
+                                result.comments_count = parseInt(parts[1]) || 0;
+                                result.likes_count = parseInt(parts[2]) || 0;
+                            }
+                        }
+                    }
+
+                    // 备用方案：从工具栏按钮获取
+                    if (result.reposts_count === 0 && result.comments_count === 0 && result.likes_count === 0) {
+                        const toolbarSelectors = [
+                            '[class*="toolbar"]',
+                            '[class*="card-act"]',
+                            'footer'
+                        ];
+
+                        for (const selector of toolbarSelectors) {
+                            const toolbar = document.querySelector(selector);
+                            if (!toolbar) continue;
+
+                            // 查找所有按钮/链接，提取数字
+                            const items = toolbar.querySelectorAll('button, a, span, div');
+                            for (const item of items) {
+                                const text = item.textContent.trim();
+                                // 匹配纯数字或带单位的数字（如 "123" "1.2万"）
+                                const numMatch = text.match(/^(\\d+\\.?\\d*)万?$/);
+                                if (!numMatch) continue;
+
+                                let num = parseFloat(numMatch[1]);
+                                if (text.includes('万')) num *= 10000;
+                                num = Math.round(num);
+
+                                // 根据位置或图标判断类型
+                                const parent = item.closest('[class*="toolbar_"]') || item.parentElement;
+                                const parentText = parent ? parent.textContent : '';
+                                const classList = (item.className + ' ' + (parent?.className || '')).toLowerCase();
+
+                                if (classList.includes('repost') || classList.includes('forward') || parentText.includes('转发')) {
+                                    result.reposts_count = num;
+                                } else if (classList.includes('comment') || parentText.includes('评论')) {
+                                    result.comments_count = num;
+                                } else if (classList.includes('like') || classList.includes('attitude') || parentText.includes('赞')) {
+                                    result.likes_count = num;
+                                }
+                            }
+
+                            // 备用：直接从工具栏文本匹配
+                            if (result.reposts_count === 0 && result.comments_count === 0 && result.likes_count === 0) {
+                                const text = toolbar.textContent;
+                                const repostMatch = text.match(/转发[\\s:]*(\\d+\\.?\\d*万?)/);
+                                const commentMatch = text.match(/评论[\\s:]*(\\d+\\.?\\d*万?)/);
+                                const likeMatch = text.match(/(?:点赞|赞)[\\s:]*(\\d+\\.?\\d*万?)/);
+
+                                const parseNum = (str) => {
+                                    if (!str) return 0;
+                                    let n = parseFloat(str);
+                                    if (str.includes('万')) n *= 10000;
+                                    return Math.round(n);
+                                };
+
+                                if (repostMatch) result.reposts_count = parseNum(repostMatch[1]);
+                                if (commentMatch) result.comments_count = parseNum(commentMatch[1]);
+                                if (likeMatch) result.likes_count = parseNum(likeMatch[1]);
+                            }
+
+                            if (result.reposts_count > 0 || result.comments_count > 0 || result.likes_count > 0) {
+                                break;
+                            }
+                        }
+                    }
+
+                    // 获取图片
+                    const picSelectors = [
+                        '[class*="woo-picture-main"] img',
+                        '[class*="pic-box"] img',
+                        '[class*="WB_pic"] img'
+                    ];
+                    for (const selector of picSelectors) {
+                        const imgs = document.querySelectorAll(selector);
+                        imgs.forEach(img => {
+                            const src = img.src || img.getAttribute('data-src');
+                            if (src && !src.includes('avatar')) {
+                                // 尝试获取大图地址
+                                const largeSrc = src.replace(/\\/thumb\\d+\\//, '/large/')
+                                                    .replace(/\\/orj\\d+\\//, '/large/')
+                                                    .replace(/\\/mw\\d+\\//, '/large/');
+                                result.images.push(largeSrc);
+                            }
+                        });
+                        if (result.images.length > 0) break;
+                    }
+
+                    return result;
+                }
+            """)
+
+            if not post_data:
+                logger.warning("无法从页面解析微博数据")
+                return None
+
+            # 构建标准的微博数据结构
+            post = {
+                "mid": str(mid),
+                "uid": uid,
+                "content": post_data.get("content", ""),
+                "created_at": self._parse_weibo_time(post_data.get("created_at", "")),
+                "reposts_count": post_data.get("reposts_count", 0),
+                "comments_count": post_data.get("comments_count", 0),
+                "likes_count": post_data.get("likes_count", 0),
+                "is_repost": False,  # 详情页暂不解析转发
+                "images": post_data.get("images", []),
+                "source_url": f"https://weibo.com/{uid}/{mid}",
+            }
+
+            logger.info(f"解析微博成功: 内容长度={len(post['content'])}, 转发={post['reposts_count']}, 评论={post['comments_count']}, 点赞={post['likes_count']}, 图片={len(post['images'])}张")
+            return post
+
+        except Exception as e:
+            logger.warning(f"解析微博详情失败: {e}")
+            return None
+
+    def _smooth_scroll_to_element(self, element):
+        """平滑滚动到元素位置（拟人化）
+
+        使用 JavaScript 的 smooth 滚动行为，并添加随机延迟
+        """
+        try:
+            # 使用 JavaScript 平滑滚动
+            element.evaluate("""
+                el => el.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center'
+                })
+            """)
+            # 等待滚动动画完成 + 随机延迟（模拟人类反应时间）
+            self._random_delay(0.5, 1.0)
+        except Exception as e:
+            logger.debug(f"平滑滚动失败: {e}")
+            # 回退到普通滚动
+            element.scroll_into_view_if_needed()
+
+    def _scroll_and_wait_for_hot_button(self) -> bool:
+        """模拟用户滑动页面，滚动到「按热度」按钮可见
+
+        返回:
+            True: 按钮已出现并可见，False: 按钮未找到
+        """
+        try:
+            hot_btn = self.page.locator('text="按热度"').first
+
+            # 检查按钮是否存在于 DOM 中
+            if hot_btn.count() == 0:
+                logger.info("未找到「按热度」按钮，可能已是热度排序或页面结构不同")
+                return False
+
+            # 按钮存在，滚动到按钮可见位置
+            logger.info("滚动到「按热度」按钮位置...")
+            self._smooth_scroll_to_element(hot_btn)
+
+            # 等待按钮可见
+            try:
+                hot_btn.wait_for(state="visible", timeout=3000)
+                return True
+            except:
+                logger.warning("按钮存在但无法变为可见状态")
+                return False
+
+        except Exception as e:
+            logger.warning(f"滑动页面失败: {e}")
+            return False
+
+    def _click_hot_sort_button(self, scroll_first: bool = True):
+        """点击「按热度」按钮切换评论排序
+
+        参数:
+            scroll_first: 是否先滑动页面找按钮（默认True）
+
+        策略：等待按钮出现后平滑滚动到可见位置再点击
+        """
+        try:
+            hot_btn = self.page.locator('text="按热度"').first
+
+            # 如果需要先滑动找按钮
+            if scroll_first:
+                if not self._scroll_and_wait_for_hot_button():
+                    return
+            else:
+                # 不滑动，只检查按钮是否可见
+                try:
+                    hot_btn.wait_for(state="visible", timeout=5000)
+                except:
+                    logger.info("未找到「按热度」按钮，可能已是热度排序或页面结构不同")
+                    return
+
+            # 点击按钮
+            hot_btn.click()
+            logger.info("已点击「按热度」按钮")
+
+            # 等待评论列表更新
+            self.page.wait_for_load_state("networkidle", timeout=5000)
+
+        except Exception as e:
+            logger.debug(f"点击「按热度」按钮失败: {e}")
+
+    def get_comments(self, uid: str, mid: str, click_hot_button: bool = True) -> list:
         """
         获取微博评论
 
         参数:
             uid: 博主ID
             mid: 微博ID
-            target_count: 期望获取的评论数量（用于控制是否翻页）
-                         如果一次返回的数据超过这个数量，会全部存储
+            click_hot_button: 是否点击"按热度"按钮（默认True）
 
-        原则：不浪费已返回的数据
+        返回当前页面已加载的所有评论，不翻页
         """
-        target_count = target_count or CRAWLER_CONFIG["max_comments_per_post"]
-        logger.info(f"获取微博 {mid} 的评论 (期望 {target_count} 条)...")
-
-        # 访问详情页
-        url = f"https://weibo.com/{uid}/{mid}"
-        if mid not in self.page.url:
-            self.page.goto(url)
-            self._random_delay(2, 3)
-
         comments = []
 
         try:
@@ -715,23 +1157,9 @@ class WeiboCrawler:
             self.page.wait_for_load_state("domcontentloaded", timeout=15000)
             logger.debug("页面 DOM 已加载")
 
-            # 滚动到评论区，多次滚动确保 virtual scroller 加载更多评论
-            logger.debug("滚动到评论区...")
-            for _ in range(3):
-                self.page.evaluate("window.scrollBy(0, 500)")
-                time.sleep(0.5)
-            self._random_delay(1, 2)
-
-            # 尝试切换到热门评论（跳过，默认就是热门排序）
-            # logger.debug("尝试点击热门标签...")
-            # try:
-            #     hot_tab = self.page.locator('text="热门"').first
-            #     if hot_tab.is_visible(timeout=2000):
-            #         hot_tab.click(timeout=3000)
-            #         self._random_delay(1, 2)
-            #         logger.debug("已点击热门标签")
-            # except Exception as e:
-            #     logger.debug(f"点击热门标签失败: {e}")
+            # 点击"按热度"按钮切换评论排序（可选）
+            if click_hot_button:
+                self._click_hot_sort_button()
 
             # 解析评论（不限制数量，页面返回多少就解析多少）
             # 微博新版评论结构（Vue virtual scroller）:
@@ -786,10 +1214,6 @@ class WeiboCrawler:
                                 break
                     except:
                         continue
-
-            # 注意：这里没有实现翻页逻辑
-            # 如果需要更多评论且当前数量不足 target_count，可以在这里添加翻页
-            # 但为了减少请求，目前只获取第一页的评论
 
         except Exception as e:
             logger.warning(f"获取评论失败: {e}")
@@ -875,9 +1299,11 @@ class WeiboCrawler:
             except:
                 pass
 
-            # 生成唯一ID
+            # 生成唯一ID（使用 md5 而非 hash，确保稳定性）
             if not comment["comment_id"] and comment["content"]:
-                comment["comment_id"] = f"{mid}_{hash(comment['content'])}"
+                content_key = comment['content'] + (comment.get('uid') or '')
+                content_hash = hashlib.md5(content_key.encode('utf-8')).hexdigest()[:16]
+                comment["comment_id"] = f"{mid}_{content_hash}"
 
             if comment["content"]:
                 return comment
@@ -919,7 +1345,25 @@ class WeiboCrawler:
                 "reply_to_uid": None,
                 "reply_to_nickname": None,
                 "reply_to_content": None,
+                "images": [],
             }
+
+            # 尝试从 DOM 获取真实的 comment_id（微博评论通常有 mid 或 comment-id 属性）
+            try:
+                parent_item = elem.locator('xpath=ancestor::div[contains(@class,"item1") or contains(@class,"item2")]').first
+                if parent_item.count() > 0:
+                    # 尝试多种可能的属性名
+                    real_comment_id = (
+                        parent_item.get_attribute("mid") or
+                        parent_item.get_attribute("comment-id") or
+                        parent_item.get_attribute("comment_id") or
+                        parent_item.get_attribute("data-mid") or
+                        parent_item.get_attribute("data-id")
+                    )
+                    if real_comment_id:
+                        comment["comment_id"] = real_comment_id
+            except Exception as e:
+                logger.debug(f"获取真实comment_id失败: {e}")
 
             # 如果是子评论，设置父评论关系
             if is_sub and parent_comment:
@@ -946,6 +1390,29 @@ class WeiboCrawler:
                     comment["content"] = content_span.text_content().strip()
             except Exception as e:
                 logger.debug(f"获取评论内容失败: {e}")
+
+            # 获取评论图片 - 从 .text 下的 img 标签获取
+            try:
+                images = []
+                # 评论图片通常在 .text 内或其兄弟元素中
+                img_elems = elem.locator('.text img, img').all()
+                for img in img_elems:
+                    src = img.get_attribute("src")
+                    if src:
+                        # 过滤掉表情图片（通常是 face 或 emotion 相关的小图）
+                        if "emotion" in src.lower() or "face" in src.lower():
+                            continue
+                        # 过滤掉非微博图片CDN的图片
+                        if "sinaimg.cn" not in src and "weibo.cn" not in src:
+                            continue
+                        # 尝试获取大图URL
+                        large_src = src.replace("/thumbnail/", "/large/").replace("/orj360/", "/large/").replace("/mw690/", "/large/")
+                        images.append(large_src)
+                if images:
+                    comment["images"] = images
+                    logger.debug(f"评论包含 {len(images)} 张图片")
+            except Exception as e:
+                logger.debug(f"获取评论图片失败: {e}")
 
             # 获取时间
             try:
@@ -974,9 +1441,13 @@ class WeiboCrawler:
             except Exception as e:
                 logger.debug(f"获取点赞数失败: {e}")
 
-            # 生成唯一 ID
+            # 生成唯一 ID（如果没有从 DOM 获取到真实 ID）
             if comment["content"]:
-                comment["comment_id"] = f"{mid}_{hash(comment['content'] + (comment['uid'] or ''))}"
+                if not comment["comment_id"]:
+                    # 使用 md5 而非 hash，确保稳定性
+                    content_key = comment['content'] + (comment['uid'] or '')
+                    content_hash = hashlib.md5(content_key.encode('utf-8')).hexdigest()[:16]
+                    comment["comment_id"] = f"{mid}_{content_hash}"
                 return comment
 
             return None
@@ -1074,9 +1545,11 @@ class WeiboCrawler:
             except:
                 pass
 
-            # 生成唯一ID
+            # 生成唯一ID（使用 md5 而非 hash，确保稳定性）
             if not comment["comment_id"] and comment["content"]:
-                comment["comment_id"] = f"{mid}_{hash(comment['content'])}"
+                content_key = comment['content'] + (comment.get('uid') or '')
+                content_hash = hashlib.md5(content_key.encode('utf-8')).hexdigest()[:16]
+                comment["comment_id"] = f"{mid}_{content_hash}"
 
             if comment["content"]:
                 return comment
@@ -1190,9 +1663,11 @@ class WeiboCrawler:
             except:
                 pass
 
-            # 生成唯一ID
+            # 生成唯一ID（使用 md5 而非 hash，确保稳定性）
             if not comment["comment_id"] and comment["content"]:
-                comment["comment_id"] = f"{mid}_sub_{hash(comment['content'])}"
+                content_key = comment['content'] + (comment.get('uid') or '')
+                content_hash = hashlib.md5(content_key.encode('utf-8')).hexdigest()[:16]
+                comment["comment_id"] = f"{mid}_sub_{content_hash}"
 
             if comment["content"]:
                 return comment
@@ -1202,18 +1677,19 @@ class WeiboCrawler:
             logger.debug(f"解析子评论失败: {e}")
             return None
 
-    def crawl_blogger(self, uid: str, mode: str = "new"):
+    def crawl_blogger(self, uid: str, mode: str = "history"):
         """
         抓取单个博主的微博和评论
 
         参数:
             uid: 博主ID
             mode: 抓取模式
-                - "new": 只抓取新微博（从最新开始，遇到已入库的就停止）
-                - "history": 继续向后抓取历史微博（从上次停下的位置继续）
-                - "all": 先抓新的，再抓历史
+                - "history": 只抓取稳定微博（发布超过 stable_days 天），默认模式
+                - "new": 抓取最新微博（包括未稳定的，评论标记为待更新）
         """
         logger.info(f"开始抓取博主: {uid}, 模式: {mode}")
+
+        stable_days = CRAWLER_CONFIG.get("stable_days", 1)
 
         # 获取博主信息
         blogger_info = self.get_blogger_info(uid)
@@ -1228,12 +1704,11 @@ class WeiboCrawler:
         logger.info(f"已有记录 - 最新: {newest_mid}, 最老: {oldest_mid}")
 
         posts_to_process = []
-
         history_complete = False  # 标记历史是否已抓完（到达时间截止点）
 
-        if mode in ("new", "all"):
+        if mode == "new":
             # 抓取新微博：从最新开始，遇到已入库的停止
-            logger.info("=== 检查新微博 ===")
+            logger.info("=== 抓取最新微博（包括未稳定的） ===")
             posts, _, _ = self.get_post_list_via_api(uid, since_id=None)
 
             for post in posts:
@@ -1247,29 +1722,73 @@ class WeiboCrawler:
             else:
                 logger.info("没有新微博")
 
-        if mode in ("history", "all"):
-            # 抓取历史：从最老的微博之后继续
-            if oldest_mid:
-                logger.info(f"=== 继续抓取历史微博 (从 {oldest_mid} 之后) ===")
-                # 使用 oldest_mid 作为 since_id 继续向后翻页，检查时间范围
-                history_posts, _, reached_cutoff = self.get_post_list_via_api(
-                    uid, since_id=oldest_mid, check_date=True
-                )
+        elif mode == "history":
+            # 先处理待更新评论的微博
+            pending_posts = get_pending_comment_posts(uid, stable_days)
+            if pending_posts:
+                logger.info(f"=== 发现 {len(pending_posts)} 条微博需要更新评论 ===")
+                for post in pending_posts:
+                    mid = post["mid"]
+                    logger.info(f"更新微博 {mid} 的评论...")
 
-                for post in history_posts:
-                    if not is_post_exists(post["mid"]):
-                        posts_to_process.append(post)
+                    # 清除旧评论，重新抓取
+                    old_count = clear_comments_for_post(mid)
+                    logger.info(f"清除旧评论 {old_count} 条")
 
-                logger.info(f"获取到 {len(history_posts)} 条历史微博")
+                    # 抓取新评论
+                    comments = self.get_comments(uid, mid)
+                    saved_count = 0
+                    for comment in comments:
+                        # 下载评论图片
+                        if comment.get("images"):
+                            local_paths = self.download_comment_images(comment, uid)
+                            if local_paths:
+                                comment["local_images"] = local_paths
+                        if save_comment(comment):
+                            saved_count += 1
+                    logger.info(f"保存了 {saved_count} 条新评论")
 
-                if reached_cutoff:
-                    history_complete = True
-                    logger.info(f"✅ 博主 {uid} 的 {CRAWLER_CONFIG.get('max_days', 180)} 天内历史微博已全部抓取完成")
-            else:
-                logger.info("首次抓取，无历史记录")
+                    # 清除待更新标记
+                    clear_comment_pending(mid)
+                    self._random_delay()
+
+            # 抓取稳定的历史微博
+            logger.info(f"=== 抓取稳定微博（发布超过 {stable_days} 天） ===")
+
+            # 获取微博列表
+            posts, _, reached_cutoff = self.get_post_list_via_api(
+                uid, since_id=oldest_mid, check_date=True
+            )
+
+            # 计算稳定日期界限
+            from datetime import timedelta
+            stable_cutoff = datetime.now() - timedelta(days=stable_days)
+
+            for post in posts:
+                if is_post_exists(post["mid"]):
+                    continue
+
+                # 检查是否已稳定
+                if post.get("created_at"):
+                    try:
+                        post_date = datetime.fromisoformat(post["created_at"].replace("Z", "+00:00"))
+                        if post_date.replace(tzinfo=None) > stable_cutoff:
+                            logger.debug(f"微博 {post['mid']} 发布不足 {stable_days} 天，跳过")
+                            continue
+                    except:
+                        pass  # 解析失败时默认抓取
+
+                posts_to_process.append(post)
+
+            if posts_to_process:
+                logger.info(f"获取到 {len(posts_to_process)} 条稳定微博")
+
+            if reached_cutoff:
+                history_complete = True
+                logger.info(f"✅ 博主 {uid} 的 {CRAWLER_CONFIG.get('max_days', 180)} 天内历史微博已全部抓取完成")
 
         if not posts_to_process:
-            logger.info(f"博主 {uid} 没有需要处理的微博")
+            logger.info(f"博主 {uid} 没有需要处理的新微博")
             return
 
         # 处理每条微博
@@ -1297,36 +1816,47 @@ class WeiboCrawler:
                     if local_paths:
                         update_post_local_images(mid, local_paths)
 
-            # 获取评论（微博发布 N 天后才抓取，让评论稳定下来）
+            # 获取评论
             api_comment_count = post.get("comments_count", 0)
             existing_comment_count = get_post_comment_count(mid)
-            comment_delay_days = CRAWLER_CONFIG.get("comment_delay_days", 3)
 
-            # 检查微博是否已发布足够久
-            post_age_ok = False
-            if post.get("created_at"):
-                try:
-                    from datetime import timedelta
-                    post_date = datetime.fromisoformat(post["created_at"].replace("Z", "+00:00"))
-                    post_age = datetime.now() - post_date.replace(tzinfo=None)
-                    post_age_ok = post_age.days >= comment_delay_days
-                    if not post_age_ok:
-                        logger.info(f"微博发布不足 {comment_delay_days} 天，跳过评论抓取")
-                except:
-                    post_age_ok = True  # 解析失败时默认抓取
+            if mode == "new":
+                # new 模式：抓取评论但标记为待更新
+                if api_comment_count > 0 and existing_comment_count == 0:
+                    comments = self.get_comments(uid, mid)
+                    saved_count = 0
+                    for comment in comments:
+                        # 下载评论图片
+                        if comment.get("images"):
+                            local_paths = self.download_comment_images(comment, uid)
+                            if local_paths:
+                                comment["local_images"] = local_paths
+                        if save_comment(comment):
+                            saved_count += 1
+                    logger.info(f"保存了 {saved_count} 条评论（标记待更新）")
+                    # 设置评论待更新标记
+                    set_comment_pending(mid, True)
+                elif api_comment_count == 0:
+                    logger.info("该微博无评论")
 
-            if api_comment_count > 0 and existing_comment_count == 0 and post_age_ok:
-                # 有评论、还没抓过、且已发布足够久
-                comments = self.get_comments(uid, mid)
-                saved_count = 0
-                for comment in comments:
-                    if save_comment(comment):
-                        saved_count += 1
-                logger.info(f"保存了 {saved_count} 条评论")
-            elif existing_comment_count > 0:
-                logger.info(f"评论已抓取过 ({existing_comment_count} 条)，跳过")
-            elif api_comment_count == 0:
-                logger.info("该微博无评论")
+            elif mode == "history":
+                # history 模式：直接抓取评论，不设置待更新标记
+                if api_comment_count > 0 and existing_comment_count == 0:
+                    comments = self.get_comments(uid, mid)
+                    saved_count = 0
+                    for comment in comments:
+                        # 下载评论图片
+                        if comment.get("images"):
+                            local_paths = self.download_comment_images(comment, uid)
+                            if local_paths:
+                                comment["local_images"] = local_paths
+                        if save_comment(comment):
+                            saved_count += 1
+                    logger.info(f"保存了 {saved_count} 条评论")
+                elif existing_comment_count > 0:
+                    logger.info(f"评论已抓取过 ({existing_comment_count} 条)，跳过")
+                elif api_comment_count == 0:
+                    logger.info("该微博无评论")
 
             if not is_new_post:
                 logger.debug(f"微博已存在: {mid}")
@@ -1336,13 +1866,13 @@ class WeiboCrawler:
         logger.info(f"博主 {uid} 抓取完成")
 
 
-def run_crawler(blogger_uids: list, mode: str = "new"):
+def run_crawler(blogger_uids: list, mode: str = "history"):
     """
     运行爬虫主函数
 
     参数:
         blogger_uids: 博主ID列表
-        mode: 抓取模式 (new/history/all)
+        mode: 抓取模式 (history/new)
     """
     global _crawler_instance
 

@@ -1,6 +1,7 @@
 """
 展示指定微博的所有评论，按热度排序，支持楼层展示
 """
+import argparse
 import sqlite3
 import sys
 import os
@@ -19,12 +20,13 @@ class Colors:
     RESET = '\033[0m'      # 重置颜色
 
 
-def show_all_comments(mid: str):
+def show_all_comments(mid: str, blogger_only: bool = False):
     """
     展示特定微博的所有评论，按热度排序，支持楼层展示
 
     参数:
         mid: 微博ID
+        blogger_only: 是否只展示博主自己的评论
     """
     conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
@@ -46,12 +48,20 @@ def show_all_comments(mid: str):
         return
 
     # 查询该微博的所有评论，按热度（点赞数）降序排列
-    cursor.execute("""
-        SELECT *
-        FROM comments
-        WHERE mid = ?
-        ORDER BY likes_count DESC, created_at ASC
-    """, (mid,))
+    if blogger_only:
+        cursor.execute("""
+            SELECT *
+            FROM comments
+            WHERE mid = ? AND is_blogger_reply = 1
+            ORDER BY likes_count DESC, created_at ASC
+        """, (mid,))
+    else:
+        cursor.execute("""
+            SELECT *
+            FROM comments
+            WHERE mid = ?
+            ORDER BY likes_count DESC, created_at ASC
+        """, (mid,))
 
     all_comments = cursor.fetchall()
 
@@ -66,11 +76,17 @@ def show_all_comments(mid: str):
     print()
 
     if not all_comments:
-        print("❌ 该微博下没有找到评论")
+        if blogger_only:
+            print("❌ 该微博下没有找到博主评论")
+        else:
+            print("❌ 该微博下没有找到评论")
         conn.close()
         return
 
-    print(f"✅ 共找到 {len(all_comments)} 条评论（按热度排序）：")
+    if blogger_only:
+        print(f"✅ 共找到 {len(all_comments)} 条博主评论（按热度排序）：")
+    else:
+        print(f"✅ 共找到 {len(all_comments)} 条评论（按热度排序）：")
     print()
 
     # 构建评论映射：comment_id -> comment
@@ -150,16 +166,15 @@ def show_all_comments(mid: str):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("用法: python show_all_comments.py <微博ID>")
-        print("示例: python show_all_comments.py 5253489136775271")
-        print()
-        print("功能:")
-        print("  - 展示指定微博的所有评论")
-        print("  - 按热度（点赞数）降序排列")
-        print("  - 支持楼层展示（回复会显示在被回复评论的下方）")
-        print("  - 标注博主评论 🔥")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="展示指定微博的所有评论，按热度排序，支持楼层展示"
+    )
+    parser.add_argument("mid", help="微博ID")
+    parser.add_argument(
+        "-b", "--blogger-only",
+        action="store_true",
+        help="只展示博主自己的评论"
+    )
 
-    mid = sys.argv[1]
-    show_all_comments(mid)
+    args = parser.parse_args()
+    show_all_comments(args.mid, blogger_only=args.blogger_only)

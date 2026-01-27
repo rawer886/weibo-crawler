@@ -31,79 +31,12 @@ source venv/bin/activate
 python tests/test_single_post.py <博主UID> <微博ID>
 ```
 
-**示例**:
-```bash
-# 测试博主 2014433131 的微博 5253489136775271
-python tests/test_single_post.py 2014433131 5253489136775271
-```
-
-**运行流程**:
-1. 启动浏览器（可见模式）
-2. 检查登录状态（首次需手动登录）
-3. 访问指定微博页面
-4. 解析评论结构（主评论和子评论）
-5. 识别回复关系
-6. 保存到数据库
-7. 输出详细信息
-
-**输出示例**:
-```
-开始抓取微博 5253489136775271 的评论...
-
-获取到 15 条评论
-
-评论: 不出轨了
-  内容: 有我一个ST归零的奉献
-  UID: 6760432491
-  是否博主: False
-  回复给: None (UID: None)
-  回复内容: None
-
-评论: 唐史主任司马迁
-  内容: 出清还要死一批
-  UID: 2014433131
-  是否博主: True
-  回复给: 不出轨了 (UID: 6760432491)
-  回复内容: 有我一个ST归零的奉献
-
-成功保存 15 条评论
-```
-
 **注意事项**:
 - ⚠️ 需要先激活虚拟环境
 - 🌐 会打开浏览器窗口（非无头模式）
 - 🔐 首次运行需要手动登录
 - 📊 测试数据会保存到数据库
 
-## 添加测试脚本
-
-添加新测试脚本的建议结构：
-
-```python
-"""
-测试脚本功能说明
-"""
-import sys
-import os
-
-# 添加父目录到路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from crawler import WeiboCrawler
-
-def test_功能():
-    """测试某个功能"""
-    crawler = WeiboCrawler()
-    try:
-        crawler.start()
-        # 测试逻辑
-        pass
-    finally:
-        crawler.stop()
-
-if __name__ == "__main__":
-    test_功能()
-```
 
 ## 测试最佳实践
 
