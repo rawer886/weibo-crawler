@@ -15,7 +15,42 @@ from database import init_database, get_stats, get_recent_posts
 class Colors:
     CYAN = '\033[96m'
     YELLOW = '\033[93m'
+    DIM = '\033[2m'
     RESET = '\033[0m'
+
+
+def truncate_text(text: str, max_length: int = 100) -> str:
+    """截断文本，如果超过最大长度则添加省略号"""
+    if not text:
+        return ""
+    text = text.replace('\n', ' ').replace('\r', '')
+    if len(text) > max_length:
+        return text[:max_length] + "..."
+    return text
+
+
+def display_post_header(post: dict):
+    """展示微博信息头"""
+    print("=" * 80)
+    print(f"微博ID: {post['mid']}")
+    blogger_name = post.get('blogger_nickname') or post.get('nickname') or post.get('uid')
+    print(f"博主: {blogger_name}")
+    print(f"发布时间: {post.get('created_at', '未知')}")
+    content = post.get('content') or ''
+    print(f"微博内容: {truncate_text(content, 100)}")
+    print(f"点赞数: {post.get('likes_count', 0)} | 转发数: {post.get('reposts_count', 0)} | 评论数: {post.get('comments_count', 0)}")
+    print("=" * 80)
+    print()
+
+
+def display_blogger_header(blogger: dict, uid: str):
+    """展示博主信息头"""
+    print("=" * 80)
+    print(f"博主: {Colors.YELLOW}{blogger.get('nickname') or uid}{Colors.RESET}")
+    print(f"UID: {uid}")
+    print(f"粉丝数: {blogger.get('followers_count') or '未知'}")
+    print("=" * 80)
+    print()
 
 
 def display_comments(comments: list):
@@ -66,6 +101,37 @@ def display_comments(comments: list):
 
     for i, comment in enumerate(top_level_comments, 1):
         print_comment(comment, level=0, floor_number=i)
+
+
+def display_blogger_comment(comment: dict, index: int, total: int):
+    """
+    展示博主评论（含微博上下文）
+
+    参数:
+        comment: 评论数据（需包含 post_content, post_created_at 等字段）
+        index: 当前索引（从1开始）
+        total: 总数
+    """
+    print("-" * 80)
+
+    post_content = truncate_text(comment.get('post_content', ''), 100)
+    post_time = comment.get('post_created_at') or "未知"
+    comment_time = comment.get('created_at') or "未知"
+    likes_info = f"👍 {comment.get('likes_count', 0)}"
+
+    print(f"[{index}/{total}] 微博ID: {comment['mid']}")
+    print(f"  📝 {post_content} {Colors.DIM}[{post_time}]{Colors.RESET}")
+    print(f"  💬 {Colors.YELLOW}{comment.get('content', '')}{Colors.RESET}  {likes_info} {Colors.DIM}[{comment_time}]{Colors.RESET}")
+
+    if comment.get('reply_to_comment_id'):
+        reply_to_nickname = comment.get('reply_to_nickname')
+        reply_to_info = f"@{reply_to_nickname}" if reply_to_nickname else f"@{comment['reply_to_comment_id']}"
+
+        if comment.get('reply_to_content'):
+            reply_content = truncate_text(comment['reply_to_content'], 80)
+            print(f"  {Colors.CYAN}↳ 回复 {reply_to_info}: {reply_content}{Colors.RESET}")
+        else:
+            print(f"  {Colors.CYAN}↳ 回复 {reply_to_info}{Colors.RESET}")
 
 
 def print_crawl_stats(stats: dict):
