@@ -93,8 +93,6 @@ class WeiboAPI:
 
     def get_blogger_info(self, uid: str) -> Optional[dict]:
         """获取博主信息"""
-        logger.info(f"获取博主信息: {uid}")
-
         cache_key = f"blogger_{uid}"
         cached = self.cache.get(cache_key)
         if cached:
@@ -217,7 +215,7 @@ class WeiboAPI:
                     # 检查时间范围
                     if check_date and post["created_at"]:
                         try:
-                            post_date = datetime.strptime(post["created_at"], "%y-%m-%d %H:%M")
+                            post_date = datetime.strptime(post["created_at"], "%Y-%m-%d %H:%M")
                             if post_date < cutoff_date:
                                 logger.info(f"微博 {mid} 已超出 {max_days} 天范围，停止抓取")
                                 reached_cutoff = True
@@ -264,6 +262,7 @@ class WeiboAPI:
             "likes_count": mblog.get("attitudes_count", 0),
             "is_repost": mblog.get("retweeted_status") is not None,
             "repost_content": None,
+            "repost_images": [],
             "images": [],
             "source_url": f"https://weibo.com/{uid}/{mid}",
             "is_long_text": mblog.get("isLongText", False),
@@ -273,16 +272,12 @@ class WeiboAPI:
         if post["is_repost"] and mblog.get("retweeted_status"):
             rt = mblog["retweeted_status"]
             post["repost_content"] = self._clean_html(rt.get("text", ""))
-            rt_user = rt.get("user", {})
-            if rt_user:
-                post["repost_uid"] = str(rt_user.get("id", ""))
-                post["repost_nickname"] = rt_user.get("screen_name", "")
 
             # 原微博图片
             for pic in rt.get("pics", []):
                 large_url = pic.get("large", {}).get("url") or pic.get("url")
                 if large_url:
-                    post["images"].append(large_url)
+                    post["repost_images"].append(large_url)
 
         # 当前微博图片
         for pic in mblog.get("pics", []):
@@ -310,7 +305,7 @@ class WeiboAPI:
         return text.strip()
 
     def _parse_weibo_time(self, time_str: str) -> str:
-        """解析微博时间字符串，统一输出为 YY-MM-DD HH:MM 格式"""
+        """解析微博时间字符串，统一输出为 YYYY-MM-DD HH:MM 格式"""
         if not time_str:
             return ""
 
@@ -350,11 +345,20 @@ class WeiboAPI:
                         hour=0, minute=0, second=0
                     )
 
-            # 已经是 YY-MM-DD HH:MM 格式，直接返回
+            # YY-MM-DD HH:MM 格式（两位数年份），转换为四位数年份
             if not dt:
-                match = re.match(r'^(\d{2})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$', time_str.strip())
+                match = re.match(r'^(\d{2})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$', time_str.strip())
                 if match:
-                    return time_str
+                    year, month, day, hour, minute = match.groups()
+                    full_year = 2000 + int(year)
+                    return f"{full_year}-{int(month):02d}-{int(day):02d} {int(hour):02d}:{minute}"
+
+            # YYYY-MM-DD HH:MM 格式（四位数年份），已是目标格式
+            if not dt:
+                match = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$', time_str.strip())
+                if match:
+                    year, month, day, hour, minute = match.groups()
+                    return f"{year}-{int(month):02d}-{int(day):02d} {int(hour):02d}:{minute}"
 
             if not dt:
                 try:
@@ -364,7 +368,7 @@ class WeiboAPI:
                     pass
 
             if dt:
-                return dt.strftime("%y-%m-%d %H:%M")
+                return dt.strftime("%Y-%m-%d %H:%M")
 
             return time_str
         except Exception as e:

@@ -89,16 +89,15 @@ class PageParser:
                 "likes_count": post_data.get("likes_count", 0),
                 "is_repost": post_data.get("is_repost", False),
                 "repost_content": post_data.get("repost_content", ""),
-                "repost_uid": post_data.get("repost_uid", ""),
-                "repost_nickname": post_data.get("repost_nickname", ""),
+                "repost_images": post_data.get("repost_images", []),
                 "images": post_data.get("images", []),
                 "source_url": source_url or f"https://weibo.com/{uid}/{mid}",
             }
 
             log_msg = (f"解析成功: 内容长度={len(post['content'])}, 转发={post['reposts_count']}, "
                        f"评论={post['comments_count']}, 点赞={post['likes_count']}, 图片={len(post['images'])}张")
-            if post["is_repost"] and (post['repost_nickname'] or post['repost_uid']):
-                log_msg += f", 转发自={post['repost_nickname'] or '未知'}({post['repost_uid'] or '?'})"
+            if post["is_repost"]:
+                log_msg += f", 原微博图片={len(post['repost_images'])}张"
             logger.info(log_msg)
             return post
 
@@ -224,9 +223,10 @@ class PageParser:
                     info_text = info_elem.text_content().strip()
                     parts = info_text.split()
                     if parts:
-                        comment["created_at"] = parts[0]
+                        raw_time = parts[0]
                         if len(parts) > 1 and ':' in parts[1]:
-                            comment["created_at"] += " " + parts[1]
+                            raw_time += " " + parts[1]
+                        comment["created_at"] = self._parse_weibo_time(raw_time)
             except:
                 pass
 
@@ -266,7 +266,7 @@ class PageParser:
                   .replace("/thumb180/", "/large/")
 
     def _parse_weibo_time(self, time_str: str) -> str:
-        """解析微博时间字符串，统一输出为 YY-MM-DD HH:MM 格式"""
+        """解析微博时间字符串，统一输出为 YYYY-MM-DD HH:MM 格式"""
         if not time_str:
             return ""
 
@@ -306,11 +306,20 @@ class PageParser:
                         hour=0, minute=0, second=0
                     )
 
-            # 已经是 YY-MM-DD HH:MM 格式，直接返回
+            # YY-M-D HH:MM 或 YY-MM-DD HH:MM 格式（两位数年份），转换为四位数年份
             if not dt:
-                match = re.match(r'^(\d{2})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$', time_str.strip())
+                match = re.match(r'^(\d{2})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$', time_str.strip())
                 if match:
-                    return time_str
+                    year, month, day, hour, minute = match.groups()
+                    full_year = 2000 + int(year)
+                    return f"{full_year}-{int(month):02d}-{int(day):02d} {int(hour):02d}:{minute}"
+
+            # YYYY-MM-DD HH:MM 格式（四位数年份），已是目标格式
+            if not dt:
+                match = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$', time_str.strip())
+                if match:
+                    year, month, day, hour, minute = match.groups()
+                    return f"{year}-{int(month):02d}-{int(day):02d} {int(hour):02d}:{minute}"
 
             if not dt:
                 try:
@@ -320,7 +329,7 @@ class PageParser:
                     pass
 
             if dt:
-                return dt.strftime("%y-%m-%d %H:%M")
+                return dt.strftime("%Y-%m-%d %H:%M")
 
             return time_str
         except:
@@ -339,92 +348,89 @@ class PageParser:
                     images: [],
                     is_repost: false,
                     repost_content: '',
-                    repost_uid: '',
-                    repost_nickname: ''
+                    repost_images: []
                 };
 
-                // 检测转发
-                const repostSelectors = ['[class*="repost"]', '[class*="Feed_repost"]', '[class*="ogText"]', '.wbpro-feed-ogText'];
-                let repostArea = null;
-                for (const sel of repostSelectors) {
-                    repostArea = document.querySelector(sel);
-                    if (repostArea) break;
-                }
+                // 检测转发：必须有独立的转发区块
+                // 转发区块的特征是 class 包含独立的 "retweet" 单词或 "_retweet_m" 开头的类
+                // 注意：wbpro-feed-ogText 只是原创微博的内容区域，不代表是转发
+                const retweetArea = document.querySelector('.retweet, [class*="_retweet_m"]');
 
-                if (repostArea) {
+                if (retweetArea) {
                     result.is_repost = true;
 
-                    // 原微博内容
-                    const ogSelectors = ['[class*="_wbtext_"]', '[class*="ogText"] [class*="wbtext"]'];
-                    for (const sel of ogSelectors) {
-                        const elem = repostArea.querySelector(sel);
-                        if (elem) {
-                            result.repost_content = elem.textContent.trim();
-                            if (result.repost_content) break;
-                        }
+                    // 原微博内容（在转发区块内的 wbtext）
+                    const reTextElem = retweetArea.querySelector('[class*="_wbtext_"], [class*="wbtext"]');
+                    if (reTextElem) {
+                        result.repost_content = reTextElem.textContent.trim();
                     }
 
-                    // 原微博作者
-                    const authorLink = repostArea.querySelector('a[href*="/u/"], a[usercard]');
-                    if (authorLink) {
-                        result.repost_nickname = authorLink.textContent.trim().replace(/^@/, '');
-                        const href = authorLink.getAttribute('href') || '';
-                        const uidMatch = href.match(/\\/u\\/(\\d+)/);
-                        if (uidMatch) result.repost_uid = uidMatch[1];
-                        const usercard = authorLink.getAttribute('usercard');
-                        if (usercard && /^\\d+$/.test(usercard)) result.repost_uid = usercard;
-                    }
-
-                    // 原微博图片
-                    const ogPicSels = ['[class*="woo-picture-main"] img', 'img[src*="sinaimg.cn"]'];
-                    for (const sel of ogPicSels) {
-                        repostArea.querySelectorAll(sel).forEach(img => {
-                            const src = img.src || img.getAttribute('data-src');
-                            if (src && !src.includes('avatar') && !src.includes('emotion')) {
-                                const largeSrc = src.replace(/\\/thumb\\d+\\//, '/large/').replace(/\\/orj\\d+\\//, '/large/').replace(/\\/mw\\d+\\//, '/large/');
-                                if (!result.images.includes(largeSrc)) result.images.push(largeSrc);
+                    // 原微博图片（在转发区块内的图片）
+                    retweetArea.querySelectorAll('[class*="woo-picture-main"] img, .picture img').forEach(img => {
+                        const src = img.src || img.getAttribute('data-src');
+                        if (src && src.includes('sinaimg.cn') && !src.includes('avatar') && !src.includes('emotion')) {
+                            const largeSrc = src.replace(/\\/thumb\\d+\\//, '/large/').replace(/\\/orj\\d+\\//, '/large/').replace(/\\/mw\\d+\\//, '/large/');
+                            if (!result.repost_images.includes(largeSrc)) {
+                                result.repost_images.push(largeSrc);
                             }
-                        });
-                    }
+                        }
+                    });
                 }
 
-                // 正文内容
-                const contentSelectors = ['[class*="_wbtext_"]', '[class*="detail_wbtext"]', '.wbpro-feed-content'];
-                if (result.is_repost) {
-                    for (const sel of contentSelectors) {
-                        const elems = document.querySelectorAll(sel);
-                        for (const elem of elems) {
-                            if (!elem.closest('[class*="repost"]') && !elem.closest('[class*="ogText"]')) {
-                                result.content = elem.textContent.trim();
-                                if (result.content) break;
-                            }
-                        }
-                        if (result.content) break;
-                    }
-                } else {
-                    for (const sel of contentSelectors) {
-                        const elem = document.querySelector(sel);
-                        if (elem) {
+                // 正文内容（博主自己写的内容）
+                // 对于转发微博，内容在 wbpro-feed-ogText 区域（不在 retweet 区块内）
+                // 对于原创微博，内容也在 wbpro-feed-ogText 或 wbpro-feed-content 区域
+                const contentSelectors = ['.wbpro-feed-ogText [class*="_wbtext_"]', '[class*="detail_wbtext"]', '.wbpro-feed-content [class*="_wbtext_"]'];
+                for (const sel of contentSelectors) {
+                    const elem = document.querySelector(sel);
+                    if (elem) {
+                        // 确保不是转发区块内的内容
+                        if (!elem.closest('.retweet') && !elem.closest('[class*="_retweet_m"]')) {
                             result.content = elem.textContent.trim();
                             if (result.content) break;
                         }
                     }
                 }
 
-                // 发布时间
-                const timeSelectors = ['[class*="_time_"]', '[class*="head-info_time"]', 'time'];
-                for (const sel of timeSelectors) {
-                    const elem = document.querySelector(sel);
-                    if (elem) {
-                        result.created_at = elem.textContent.trim();
-                        if (result.created_at) break;
+                // 发布时间（博主微博的时间，在 header 内或 _body_ 的第一个时间元素）
+                const headerTimeElem = document.querySelector('header [class*="_time_"], ._body_ > header [class*="_time_"]');
+                if (headerTimeElem) {
+                    result.created_at = headerTimeElem.textContent.trim();
+                } else {
+                    // 备选：第一个时间元素（不在转发区块内）
+                    const timeElems = document.querySelectorAll('[class*="_time_"]');
+                    for (const elem of timeElems) {
+                        if (!elem.closest('.retweet') && !elem.closest('[class*="_retweet_m"]')) {
+                            result.created_at = elem.textContent.trim();
+                            if (result.created_at) break;
+                        }
                     }
                 }
 
-                // 互动数据
-                const footer = document.querySelector('footer[aria-label]');
-                if (footer) {
-                    const label = footer.getAttribute('aria-label');
+                // 互动数据（博主微博的数据，不是原微博的）
+                // 博主微博的 footer 应该在 _body_ 元素内但不在 retweet 区块内
+                // 查找策略：找到所有 footer，选择最后一个不在 retweet 内的（因为博主微博的 footer 在转发区块之后）
+                const allFooters = document.querySelectorAll('footer[aria-label]');
+                let targetFooter = null;
+
+                // 遍历所有 footer，找最后一个不在 retweet 区块内的
+                for (const footer of allFooters) {
+                    if (!footer.closest('.retweet') && !footer.closest('[class*="_retweet_m"]')) {
+                        targetFooter = footer;
+                        // 继续遍历，取最后一个符合条件的
+                    }
+                }
+
+                // 如果没找到，尝试从 _body_ 元素的直接子 footer 获取
+                if (!targetFooter) {
+                    const bodyFooter = document.querySelector('[class*="_body_"] > footer[aria-label]');
+                    if (bodyFooter) {
+                        targetFooter = bodyFooter;
+                    }
+                }
+
+                if (targetFooter) {
+                    const label = targetFooter.getAttribute('aria-label');
                     if (label) {
                         const parts = label.split(',');
                         if (parts.length >= 3) {
@@ -435,24 +441,26 @@ class PageParser:
                     }
                 }
 
-                // 图片
-                if (!result.is_repost || result.images.length === 0) {
-                    const picContainers = document.querySelectorAll('.picture, [class*="woo-picture-main"]');
-                    const seenUrls = new Set(result.images);
-                    picContainers.forEach(container => {
-                        container.querySelectorAll('img').forEach(img => {
-                            const src = img.src || img.getAttribute('data-src');
-                            if (!src || !src.includes('sinaimg.cn')) return;
-                            if (src.includes('avatar') || src.includes('emotion')) return;
-                            const largeSrc = src.replace(/\\/thumb\\d+\\//, '/large/').replace(/\\/orj\\d+\\//, '/large/').replace(/\\/mw\\d+\\//, '/large/');
-                            const imgId = largeSrc.replace(/https?:\\/\\/[^/]+/, '');
-                            if (!seenUrls.has(imgId)) {
-                                seenUrls.add(imgId);
-                                result.images.push(largeSrc);
-                            }
-                        });
+                // 博主微博的图片（不在转发区块内的图片）
+                const picContainers = document.querySelectorAll('.picture, [class*="woo-picture-main"]');
+                const seenUrls = new Set();
+                picContainers.forEach(container => {
+                    // 跳过转发区块内的图片
+                    if (container.closest('.retweet') || container.closest('[class*="_retweet_m"]')) {
+                        return;
+                    }
+                    container.querySelectorAll('img').forEach(img => {
+                        const src = img.src || img.getAttribute('data-src');
+                        if (!src || !src.includes('sinaimg.cn')) return;
+                        if (src.includes('avatar') || src.includes('emotion')) return;
+                        const largeSrc = src.replace(/\\/thumb\\d+\\//, '/large/').replace(/\\/orj\\d+\\//, '/large/').replace(/\\/mw\\d+\\//, '/large/');
+                        const imgId = largeSrc.replace(/https?:\\/\\/[^/]+/, '');
+                        if (!seenUrls.has(imgId)) {
+                            seenUrls.add(imgId);
+                            result.images.push(largeSrc);
+                        }
                     });
-                }
+                });
 
                 return result;
             }

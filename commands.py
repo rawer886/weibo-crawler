@@ -78,8 +78,7 @@ def crawl_user(uid: str, mode: str = "history"):
     }
 
     logger.info(f"批量抓取用户: {uid}")
-    logger.info(f"抓取模式: {mode} - {mode_desc.get(mode, mode)}")
-    print()
+    logger.info(f"抓取模式: {mode} - {mode_desc.get(mode, mode)}\n")
 
     init_database()
 

@@ -50,9 +50,9 @@ def init_database():
                 comments_count INTEGER DEFAULT 0,
                 likes_count INTEGER DEFAULT 0,
                 is_repost INTEGER DEFAULT 0,
-                repost_uid TEXT,
-                repost_nickname TEXT,
                 repost_content TEXT,
+                repost_images TEXT,
+                repost_local_images TEXT,
                 images TEXT,
                 local_images TEXT,
                 video_url TEXT,
@@ -101,6 +101,16 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_comments_mid ON comments(mid)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_comments_likes ON comments(likes_count)")
 
+        # 迁移：添加 repost_images 和 repost_local_images 列（如果不存在）
+        cursor.execute("PRAGMA table_info(posts)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'repost_images' not in columns:
+            cursor.execute("ALTER TABLE posts ADD COLUMN repost_images TEXT")
+            logger.info("已添加 repost_images 列")
+        if 'repost_local_images' not in columns:
+            cursor.execute("ALTER TABLE posts ADD COLUMN repost_local_images TEXT")
+            logger.info("已添加 repost_local_images 列")
+
         conn.commit()
         logger.info("数据库初始化完成")
 
@@ -137,9 +147,9 @@ def save_post(post: dict) -> bool:
         cursor.execute("""
             INSERT INTO posts (mid, uid, content, created_at, reposts_count,
                              comments_count, likes_count, is_repost,
-                             repost_uid, repost_nickname, repost_content,
+                             repost_content, repost_images,
                              images, local_images, video_url, source_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             post["mid"],
             post["uid"],
@@ -149,9 +159,8 @@ def save_post(post: dict) -> bool:
             post.get("comments_count", 0),
             post.get("likes_count", 0),
             1 if post.get("is_repost") else 0,
-            post.get("repost_uid"),
-            post.get("repost_nickname"),
             post.get("repost_content"),
+            json.dumps(post.get("repost_images", []), ensure_ascii=False),
             json.dumps(post.get("images", []), ensure_ascii=False),
             post.get("local_images"),
             post.get("video_url"),
@@ -168,8 +177,8 @@ def update_post(post: dict) -> bool:
         cursor.execute("""
             UPDATE posts SET
                 content = ?, created_at = ?, reposts_count = ?, comments_count = ?,
-                likes_count = ?, is_repost = ?, repost_uid = ?, repost_nickname = ?,
-                repost_content = ?, images = ?, video_url = ?, source_url = ?
+                likes_count = ?, is_repost = ?, repost_content = ?, repost_images = ?,
+                images = ?, video_url = ?, source_url = ?
             WHERE mid = ?
         """, (
             post.get("content"),
@@ -178,9 +187,8 @@ def update_post(post: dict) -> bool:
             post.get("comments_count", 0),
             post.get("likes_count", 0),
             1 if post.get("is_repost") else 0,
-            post.get("repost_uid"),
-            post.get("repost_nickname"),
             post.get("repost_content"),
+            json.dumps(post.get("repost_images", []), ensure_ascii=False),
             json.dumps(post.get("images", []), ensure_ascii=False),
             post.get("video_url"),
             post.get("source_url"),
@@ -382,6 +390,16 @@ def update_post_local_images(mid: str, local_images: list):
         conn.commit()
 
 
+def update_post_repost_local_images(mid: str, local_images: list):
+    """更新原微博的本地图片路径"""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE posts SET repost_local_images = ? WHERE mid = ?",
+            (json.dumps(local_images, ensure_ascii=False), mid)
+        )
+        conn.commit()
+
+
 def set_comment_pending(mid: str, pending: bool = True):
     """设置微博的评论待更新标记"""
     with get_connection() as conn:
@@ -391,7 +409,7 @@ def set_comment_pending(mid: str, pending: bool = True):
 
 def get_pending_comment_posts(uid: str, stable_days: int) -> list:
     """获取需要更新评论的微博（发布时间超过 stable_days 天且 comment_pending=1）"""
-    cutoff_date = (datetime.now() - timedelta(days=stable_days)).strftime("%y-%m-%d %H:%M")
+    cutoff_date = (datetime.now() - timedelta(days=stable_days)).strftime("%Y-%m-%d %H:%M")
     with get_connection() as conn:
         cursor = conn.execute("""
             SELECT mid, uid, content, created_at, comments_count
