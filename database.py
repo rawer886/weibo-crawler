@@ -45,10 +45,17 @@ def init_database():
                 local_images TEXT,
                 video_url TEXT,
                 source_url TEXT,
+                comment_pending INTEGER DEFAULT 0,
                 crawled_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (uid) REFERENCES bloggers(uid)
             )
         """)
+
+        # 为已存在的表添加 comment_pending 字段（如果不存在）
+        try:
+            cursor.execute("ALTER TABLE posts ADD COLUMN comment_pending INTEGER DEFAULT 0")
+        except:
+            pass  # 字段已存在，忽略错误
 
         # 评论表
         cursor.execute("""
@@ -66,10 +73,22 @@ def init_database():
                 reply_to_uid TEXT,
                 reply_to_nickname TEXT,
                 reply_to_content TEXT,
+                images TEXT,
+                local_images TEXT,
                 crawled_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (mid) REFERENCES posts(mid)
             )
         """)
+
+        # 为已存在的评论表添加图片字段（如果不存在）
+        try:
+            cursor.execute("ALTER TABLE comments ADD COLUMN images TEXT")
+        except:
+            pass  # 字段已存在，忽略错误
+        try:
+            cursor.execute("ALTER TABLE comments ADD COLUMN local_images TEXT")
+        except:
+            pass  # 字段已存在，忽略错误
 
         # 抓取进度表（记录每个博主抓到哪了）
         cursor.execute("""
@@ -169,6 +188,56 @@ def save_post(post: dict) -> bool:
         return True
 
 
+def update_post(post: dict) -> bool:
+    """
+    更新已存在的微博数据
+    返回: True 表示更新成功，False 表示微博不存在
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # 检查是否已存在
+        cursor.execute("SELECT mid FROM posts WHERE mid = ?", (post["mid"],))
+        if not cursor.fetchone():
+            return False
+
+        # images 使用 JSON 格式存储
+        images_json = json.dumps(post.get("images", []), ensure_ascii=False)
+
+        cursor.execute("""
+            UPDATE posts SET
+                content = ?,
+                created_at = ?,
+                reposts_count = ?,
+                comments_count = ?,
+                likes_count = ?,
+                is_repost = ?,
+                repost_uid = ?,
+                repost_nickname = ?,
+                repost_content = ?,
+                images = ?,
+                video_url = ?,
+                source_url = ?
+            WHERE mid = ?
+        """, (
+            post.get("content"),
+            post.get("created_at"),
+            post.get("reposts_count", 0),
+            post.get("comments_count", 0),
+            post.get("likes_count", 0),
+            1 if post.get("is_repost") else 0,
+            post.get("repost_uid"),
+            post.get("repost_nickname"),
+            post.get("repost_content"),
+            images_json,
+            post.get("video_url"),
+            post.get("source_url"),
+            post["mid"],
+        ))
+        conn.commit()
+        return True
+
+
 def save_comment(comment: dict) -> bool:
     """
     保存评论，如果已存在则跳过
@@ -182,11 +251,16 @@ def save_comment(comment: dict) -> bool:
         if cursor.fetchone():
             return False
 
+        # images 使用 JSON 格式存储
+        images_json = json.dumps(comment.get("images", []), ensure_ascii=False) if comment.get("images") else None
+        local_images_json = json.dumps(comment.get("local_images", []), ensure_ascii=False) if comment.get("local_images") else None
+
         cursor.execute("""
             INSERT INTO comments (comment_id, mid, uid, nickname, content,
                                 created_at, likes_count, is_blogger_reply,
-                                reply_to_comment_id, reply_to_uid, reply_to_nickname, reply_to_content)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                reply_to_comment_id, reply_to_uid, reply_to_nickname, reply_to_content,
+                                images, local_images)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             comment["comment_id"],
             comment["mid"],
@@ -200,9 +274,26 @@ def save_comment(comment: dict) -> bool:
             comment.get("reply_to_uid"),
             comment.get("reply_to_nickname"),
             comment.get("reply_to_content"),
+            images_json,
+            local_images_json,
         ))
         conn.commit()
         return True
+
+
+def update_comment_likes(comment_id: str, likes_count: int) -> bool:
+    """
+    更新评论的点赞数
+    返回: True 表示更新成功，False 表示评论不存在
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE comments SET likes_count = ? WHERE comment_id = ?",
+            (likes_count, comment_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def is_post_exists(mid: str) -> bool:
@@ -349,3 +440,51 @@ def update_post_local_images(mid: str, local_images: list):
             UPDATE posts SET local_images = ? WHERE mid = ?
         """, (local_images_json, mid))
         conn.commit()
+
+
+def set_comment_pending(mid: str, pending: bool = True):
+    """设置微博的评论待更新标记"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE posts SET comment_pending = ? WHERE mid = ?
+        """, (1 if pending else 0, mid))
+        conn.commit()
+
+
+def get_pending_comment_posts(uid: str, stable_days: int) -> list:
+    """
+    获取需要更新评论的微博列表
+    条件：comment_pending=1 且发布时间已超过 stable_days 天
+    """
+    from datetime import datetime, timedelta
+    cutoff_date = (datetime.now() - timedelta(days=stable_days)).isoformat()
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT mid, uid, content, created_at, comments_count
+            FROM posts
+            WHERE uid = ? AND comment_pending = 1 AND created_at < ?
+            ORDER BY created_at DESC
+        """, (uid, cutoff_date))
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def clear_comment_pending(mid: str):
+    """清除微博的评论待更新标记"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE posts SET comment_pending = 0 WHERE mid = ?
+        """, (mid,))
+        conn.commit()
+
+
+def clear_comments_for_post(mid: str):
+    """清除某条微博的所有评论（用于重新抓取前清理）"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM comments WHERE mid = ?", (mid,))
+        conn.commit()
+        return cursor.rowcount
