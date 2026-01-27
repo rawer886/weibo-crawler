@@ -36,7 +36,7 @@ class ImageDownloader:
     def download_post_images(self, post: dict) -> List[str]:
         """下载微博图片
 
-        目录结构: images/{uid}/{YYYY-MM}/{mid}_{index}.jpg
+        目录结构: images/{uid}/{YY-MM}/{mid}_{index}.jpg
         """
         date_str = self._parse_date(post.get("created_at", ""))
         return self._download_images(
@@ -50,7 +50,7 @@ class ImageDownloader:
     def download_comment_images(self, comment: dict, post_uid: str) -> List[str]:
         """下载评论图片
 
-        目录结构: images/{uid}/{YYYY-MM}/comment_{comment_id}_{index}.jpg
+        目录结构: images/{uid}/{YY-MM}/comment_{comment_id}_{index}.jpg
         """
         date_str = self._parse_date(comment.get("created_at", ""), is_comment=True)
         return self._download_images(
@@ -186,23 +186,13 @@ class ImageDownloader:
         return ".jpg"
 
     def _parse_date(self, created_at: str, is_comment: bool = False) -> str:
-        """解析日期字符串，返回 YYYY-MM 格式用于图片存储目录"""
+        """解析日期字符串，返回 YY-MM 格式用于图片存储目录"""
         try:
-            if is_comment and "-" in created_at:
-                # 评论格式: "26-1-23" -> "2026-01"
+            # 统一格式: "26-01-27 17:14" -> "26-01"
+            if "-" in created_at:
                 parts = created_at.split()[0].split("-")
                 if len(parts) == 3:
-                    year = parts[0] if len(parts[0]) == 4 else f"20{parts[0]}"
-                    month = parts[1].zfill(2)
-                    return f"{year}-{month}"
-            elif "T" in created_at:
-                # ISO格式: "2024-01-15T12:00:00" -> "2024-01"
-                date_part = created_at.split("T")[0]
-                return date_part[:7]  # YYYY-MM
-            elif " " in created_at:
-                # 空格分隔: "2024-01-15 12:00:00" -> "2024-01"
-                date_part = created_at.split(" ")[0]
-                return date_part[:7]  # YYYY-MM
+                    return f"{parts[0]}-{parts[1]}"
         except:
             pass
-        return datetime.now().strftime("%Y-%m")
+        return datetime.now().strftime("%y-%m")

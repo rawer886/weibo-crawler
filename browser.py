@@ -90,7 +90,7 @@ class BrowserManager:
         with open(CRAWLER_CONFIG["cookie_file"], "w") as f:
             json.dump(cookies, f)
         self._update_request_cookies(cookies)
-        logger.info("Cookies 已保存")
+        logger.info("Cookies 已更新")
 
     def _load_cookies(self):
         """从文件加载 cookies"""

@@ -2,12 +2,15 @@
 数据库操作模块
 """
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Optional
 
 from config import DATABASE_PATH
+
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -99,7 +102,7 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_comments_likes ON comments(likes_count)")
 
         conn.commit()
-        print("数据库初始化完成")
+        logger.info("数据库初始化完成")
 
 
 def save_blogger(blogger: dict):
@@ -388,7 +391,7 @@ def set_comment_pending(mid: str, pending: bool = True):
 
 def get_pending_comment_posts(uid: str, stable_days: int) -> list:
     """获取需要更新评论的微博（发布时间超过 stable_days 天且 comment_pending=1）"""
-    cutoff_date = (datetime.now() - timedelta(days=stable_days)).isoformat()
+    cutoff_date = (datetime.now() - timedelta(days=stable_days)).strftime("%y-%m-%d %H:%M")
     with get_connection() as conn:
         cursor = conn.execute("""
             SELECT mid, uid, content, created_at, comments_count
@@ -412,6 +415,17 @@ def clear_comments_for_post(mid: str) -> int:
         cursor = conn.execute("DELETE FROM comments WHERE mid = ?", (mid,))
         conn.commit()
         return cursor.rowcount
+
+
+def delete_post(mid: str) -> bool:
+    """删除微博及其所有评论"""
+    with get_connection() as conn:
+        # 先删除评论
+        conn.execute("DELETE FROM comments WHERE mid = ?", (mid,))
+        # 再删除微博
+        cursor = conn.execute("DELETE FROM posts WHERE mid = ?", (mid,))
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def get_post_with_blogger(mid: str) -> Optional[dict]:
@@ -449,6 +463,18 @@ def get_blogger(uid: str) -> Optional[dict]:
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM bloggers WHERE uid = ?", (uid,)).fetchone()
         return dict(row) if row else None
+
+
+def update_comment_likes(comment_id: str, likes_count: int) -> bool:
+    """更新评论点赞数。返回 True 表示已更新"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE comments SET likes_count = ? WHERE comment_id = ?",
+            (likes_count, comment_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def get_blogger_comments(uid: str) -> list:
