@@ -412,3 +412,53 @@ def clear_comments_for_post(mid: str) -> int:
         cursor = conn.execute("DELETE FROM comments WHERE mid = ?", (mid,))
         conn.commit()
         return cursor.rowcount
+
+
+def get_post_with_blogger(mid: str) -> Optional[dict]:
+    """获取微博及博主信息"""
+    with get_connection() as conn:
+        row = conn.execute("""
+            SELECT p.*, b.nickname as blogger_nickname
+            FROM posts p
+            LEFT JOIN bloggers b ON p.uid = b.uid
+            WHERE p.mid = ?
+        """, (mid,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_comments_by_mid(mid: str, blogger_only: bool = False) -> list:
+    """获取微博的评论列表"""
+    with get_connection() as conn:
+        if blogger_only:
+            cursor = conn.execute("""
+                SELECT * FROM comments
+                WHERE mid = ? AND is_blogger_reply = 1
+                ORDER BY likes_count DESC, created_at ASC
+            """, (mid,))
+        else:
+            cursor = conn.execute("""
+                SELECT * FROM comments
+                WHERE mid = ?
+                ORDER BY likes_count DESC, created_at ASC
+            """, (mid,))
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_blogger(uid: str) -> Optional[dict]:
+    """获取博主信息"""
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM bloggers WHERE uid = ?", (uid,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_blogger_comments(uid: str) -> list:
+    """获取博主的所有评论（含微博上下文）"""
+    with get_connection() as conn:
+        cursor = conn.execute("""
+            SELECT c.*, p.content as post_content, p.created_at as post_created_at
+            FROM comments c
+            LEFT JOIN posts p ON c.mid = p.mid
+            WHERE c.is_blogger_reply = 1 AND p.uid = ?
+            ORDER BY c.created_at DESC
+        """, (uid,))
+        return [dict(row) for row in cursor.fetchall()]

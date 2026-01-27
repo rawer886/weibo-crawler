@@ -3,9 +3,9 @@
 微博爬虫 - 命令行入口
 
 用法:
-    python main.py https://weibo.com/3689493785/QogZOCUm5      # 抓取单条微博
-    python main.py https://weibo.com/u/3689493785             # 批量抓取用户微博
-    python main.py https://weibo.com/u/3689493785 --mode new  # 抓取最新微博
+    python main.py https://weibo.com/1497035431/AbCdEfGhI      # 抓取单条微博
+    python main.py https://weibo.com/u/1497035431             # 批量抓取用户微博
+    python main.py https://weibo.com/u/1497035431 --mode new  # 抓取最新微博
     python main.py --status                                   # 查看统计信息
     python main.py --recent                                   # 查看最近抓取
 """
@@ -22,8 +22,8 @@ def parse_weibo_url(url: str) -> dict:
     """解析微博 URL，返回类型和参数
 
     支持的格式:
-    - https://weibo.com/u/3689493785          -> {"type": "user", "uid": "3689493785"}
-    - https://weibo.com/3689493785/QogZOCUm5  -> {"type": "post", "uid": "3689493785", "mid": "QogZOCUm5"}
+    - https://weibo.com/u/1497035431          -> {"type": "user", "uid": "3689493785"}
+    - https://weibo.com/1497035431/AbCdEfGhI  -> {"type": "post", "uid": "3689493785", "mid": "QogZOCUm5"}
     - https://weibo.com/3689493785/5234567890 -> {"type": "post", "uid": "3689493785", "mid": "5234567890"}
     """
     # 用户主页: /u/数字
@@ -45,9 +45,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python main.py https://weibo.com/3689493785/QogZOCUm5      # 抓取单条微博
-  python main.py https://weibo.com/u/3689493785             # 批量抓取用户微博
-  python main.py https://weibo.com/u/3689493785 --mode new  # 抓取用户最新微博
+  python main.py https://weibo.com/1497035431/AbCdEfGhI      # 抓取单条微博
+  python main.py https://weibo.com/u/1497035431             # 批量抓取用户微博
+  python main.py https://weibo.com/u/1497035431 --mode new  # 抓取用户最新微博
         """
     )
     parser.add_argument("url", nargs="?", help="微博 URL（用户主页或单条微博）")
@@ -83,8 +83,8 @@ def main():
     else:
         print(f"无法解析 URL: {args.url}")
         print("\n支持的格式:")
-        print("  https://weibo.com/u/3689493785          # 用户主页")
-        print("  https://weibo.com/3689493785/QogZOCUm5  # 单条微博")
+        print("  https://weibo.com/u/1497035431          # 用户主页")
+        print("  https://weibo.com/1497035431/AbCdEfGhI  # 单条微博")
         sys.exit(1)
 
 
