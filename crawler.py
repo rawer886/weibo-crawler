@@ -113,6 +113,7 @@ class WeiboCrawler:
         result = {
             "post": None,
             "comments": [],
+            "success": False,  # 微博是否成功处理（保存或已存在）
             "stats": {
                 "post_saved": False,
                 "comments_saved": 0,
@@ -142,10 +143,12 @@ class WeiboCrawler:
         post = self.parser.parse_post(uid, mid, source_url=source_url)
         result["post"] = post
 
-        # 3. 保存微博
-        if post and post.get("content"):
+        # 3. 保存微博（有文本或有图片/视频即可保存）
+        has_content = post and (post.get("content") or post.get("images") or post.get("video"))
+        if has_content:
             is_new = save_post(post, stable_days=stable_days)
             result["stats"]["post_saved"] = is_new
+            result["success"] = True  # 成功保存或已存在
 
             # 4. 下载微博图片
             if post.get("images"):
@@ -161,7 +164,8 @@ class WeiboCrawler:
                 if repost_local_paths:
                     update_post_repost_local_images(mid, repost_local_paths)
         else:
-            logger.warning(f"微博内容为空，跳过保存: {mid}")
+            # 跳过保存时 success 保持 False，不会标记 detail_status 为已抓取
+            logger.warning(f"微博无有效内容（无文本、图片或视频），跳过保存: {mid}")
 
         # 6. 抓取评论（评论数为 0 时跳过）
         comments_count = post.get("comments_count", 0) if post else 0
@@ -437,8 +441,10 @@ class WeiboCrawler:
                 mid = post["mid"]
                 logger.info(f"[{i+1}/{len(pending_posts)}] 抓取: {mid}")
 
-                self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False)
-                mark_post_detail_done(mid)
+                result = self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False)
+                # 只有成功处理微博时才标记为已抓取详情
+                if result["success"]:
+                    mark_post_detail_done(mid)
                 self._random_delay()
 
             logger.info(f"博主 {uid} 详情抓取完成")
