@@ -6,11 +6,11 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import get_post_with_blogger, get_comments_by_mid, clear_comments_for_post
-from display import display_post_header, display_comments
+from database import get_post_with_blogger, get_comments_by_mid, delete_comments_by_mid
+from display import display_post_header, display_comments, Colors
 
 
-def delete_comments_by_mid(mid: str):
+def delete_comments_for_post(mid: str):
     """删除指定微博的所有评论"""
     post = get_post_with_blogger(mid)
     comments = get_comments_by_mid(mid)
@@ -35,15 +35,15 @@ def delete_comments_by_mid(mid: str):
 
     # 用户确认
     print()
-    print(f"即将删除微博 {mid} 的全部 {len(comments)} 条评论")
-    response = input("确认删除吗？(y/n): ").strip().lower()
+    print(f"{Colors.RED}即将删除微博 {mid} 的全部 {len(comments)} 条评论，微博正文不会被删除{Colors.RESET}")
+    response = input(f"{Colors.RED}确认删除吗？(y/n): {Colors.RESET}").strip().lower()
 
     if response != 'y':
         print("已取消删除")
         return
 
     # 执行删除
-    deleted = clear_comments_for_post(mid)
+    deleted = delete_comments_by_mid(mid)
     print(f"成功删除 {deleted} 条评论")
 
 
@@ -53,4 +53,4 @@ if __name__ == "__main__":
         print("示例: python scripts/delete_comments.py 5254891884513482")
         sys.exit(1)
 
-    delete_comments_by_mid(sys.argv[1])
+    delete_comments_for_post(sys.argv[1])

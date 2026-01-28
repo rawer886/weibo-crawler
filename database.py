@@ -468,23 +468,26 @@ def clear_comment_pending(mid: str):
         conn.commit()
 
 
-def clear_comments_for_post(mid: str) -> int:
-    """清除某条微博的所有评论"""
+def delete_comments_by_mid(mid: str) -> int:
+    """删除指定微博的所有评论（包含级联评论）。返回删除数量"""
     with get_connection() as conn:
         cursor = conn.execute("DELETE FROM comments WHERE mid = ?", (mid,))
         conn.commit()
         return cursor.rowcount
 
 
-def delete_post(mid: str) -> bool:
-    """删除微博及其所有评论"""
+def delete_post_only(mid: str) -> bool:
+    """仅删除微博本身（不删除评论）。返回是否删除成功"""
     with get_connection() as conn:
-        # 先删除评论
-        conn.execute("DELETE FROM comments WHERE mid = ?", (mid,))
-        # 再删除微博
         cursor = conn.execute("DELETE FROM posts WHERE mid = ?", (mid,))
         conn.commit()
         return cursor.rowcount > 0
+
+
+def delete_post(mid: str) -> bool:
+    """删除微博及其所有评论"""
+    delete_comments_by_mid(mid)
+    return delete_post_only(mid)
 
 
 def get_post_with_blogger(mid: str) -> Optional[dict]:
