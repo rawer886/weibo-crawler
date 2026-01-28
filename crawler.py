@@ -97,12 +97,14 @@ class WeiboCrawler:
         return self.parser.parse_numeric_mid()
 
     def crawl_single_post(self, uid: str, mid: str, source_url: str = None,
-                         skip_navigation: bool = False, skip_blogger_check: bool = False) -> dict:
+                         skip_navigation: bool = False, skip_blogger_check: bool = False,
+                         show_comments: bool = True) -> dict:
         """抓取单条微博
 
         参数:
             skip_navigation: 跳过页面导航（当页面已在目标位置时使用）
             skip_blogger_check: 跳过博主信息检查（批量抓取时已在入口处处理）
+            show_comments: 展示评论（批量抓取时设为 False）
         """
         result = {
             "post": None,
@@ -244,7 +246,7 @@ class WeiboCrawler:
         print()
         logger.info("抓取完成")
         print()
-        display_post_with_comments(mid)
+        display_post_with_comments(mid, show_comments=show_comments)
         return result
 
     def _parse_post_date(self, post: dict) -> datetime:
@@ -372,7 +374,7 @@ class WeiboCrawler:
         for i, post in enumerate(posts_to_process):
             mid = post["mid"]
             logger.info(f"处理第 {i+1}/{len(posts_to_process)} 条微博: {mid}")
-            self.crawl_single_post(uid, mid, skip_blogger_check=True)
+            self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False)
             self._random_delay()
 
         logger.info(f"博主 {uid} 抓取完成")
@@ -391,7 +393,7 @@ class WeiboCrawler:
             old_count = delete_comments_by_mid(mid)
             logger.info(f"清除旧评论 {old_count} 条")
 
-            result = self.crawl_single_post(uid, mid, skip_blogger_check=True)
+            result = self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False)
             logger.info(f"保存了 {result['stats']['comments_saved']} 条新评论")
 
             clear_comment_pending(mid)
