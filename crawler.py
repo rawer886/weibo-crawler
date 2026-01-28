@@ -19,7 +19,7 @@ from database import (
     is_post_exists, get_blogger_oldest_mid, get_blogger_newest_mid,
     update_crawl_progress, update_post_local_images, update_post_repost_local_images,
     set_comment_pending, get_pending_comment_posts,
-    clear_comment_pending, clear_comments_for_post,
+    clear_comment_pending, delete_comments_by_mid,
     update_comment_likes, get_next_since_id, update_next_since_id
 )
 from browser import BrowserManager
@@ -125,7 +125,12 @@ class WeiboCrawler:
             self.browser.goto(url)
             time.sleep(5)
 
-        # 2. 解析微博内容
+        # 2. 保存博主信息
+        blogger_info = self.api.get_blogger_info(uid)
+        if blogger_info:
+            save_blogger(blogger_info)
+
+        # 3. 解析微博内容
         post = self.parser.parse_post(uid, mid, source_url=source_url)
         result["post"] = post
 
@@ -230,12 +235,19 @@ class WeiboCrawler:
             # 输出评论保存统计
             saved_count = result['stats']['comments_saved']
             updated_count = result['stats']['comments_updated']
-            if saved_count > 0 and updated_count > 0:
-                logger.info(f"保存新增 {saved_count} 条评论，更新 {updated_count} 条点赞数")
-            elif saved_count > 0:
-                logger.info(f"保存 {saved_count} 条评论")
-            elif updated_count > 0:
-                logger.info(f"未新增评论，更新 {updated_count} 条点赞数")
+            images_count = result['stats']['comment_images_downloaded']
+
+            # 构建日志消息
+            parts = []
+            if saved_count > 0:
+                parts.append(f"新增 {saved_count} 条")
+            if updated_count > 0:
+                parts.append(f"更新 {updated_count} 条点赞")
+            if images_count > 0:
+                parts.append(f"下载 {images_count} 张图片")
+
+            if parts:
+                logger.info(f"评论: {', '.join(parts)}")
         else:
             logger.info("评论数为 0，跳过评论抓取")
 
@@ -389,7 +401,7 @@ class WeiboCrawler:
             mid = post["mid"]
             logger.info(f"更新微博 {mid} 的评论...")
 
-            old_count = clear_comments_for_post(mid)
+            old_count = delete_comments_by_mid(mid)
             logger.info(f"清除旧评论 {old_count} 条")
 
             result = self.crawl_single_post(uid, mid)

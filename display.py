@@ -13,6 +13,7 @@ from database import init_database, get_stats, get_recent_posts
 
 # ANSI 颜色代码
 class Colors:
+    RED = '\033[91m'
     CYAN = '\033[96m'
     YELLOW = '\033[93m'
     DIM = '\033[2m'
@@ -30,15 +31,50 @@ def truncate_text(text: str, max_length: int = 100) -> str:
     return text
 
 
+def format_comment_content(comment: dict) -> str:
+    """格式化评论内容，包含图片标记"""
+    content = comment.get('content', '')
+    if comment.get('images'):
+        content += ' [图片]'
+    return content
+
+
+def format_user_name(comment: dict) -> str:
+    """格式化用户名，博主高亮"""
+    is_blogger = comment.get('is_blogger_reply', False)
+    nickname = comment.get('nickname') or comment.get('uid') or '未知用户'
+    if is_blogger:
+        return f"{Colors.YELLOW}{nickname}🔥{Colors.RESET}"
+    return f"{Colors.GRAY}{nickname}{Colors.RESET}"
+
+
+def format_comment_meta(comment: dict) -> str:
+    """格式化评论元信息（时间、点赞）"""
+    time_info = comment.get('created_at', '未知')
+    likes_info = f"点赞数 {comment.get('likes_count', 0)}"
+    return f"{Colors.GRAY}({time_info} {likes_info}){Colors.RESET}"
+
+
+def print_single_comment(comment: dict, prefix: str = ""):
+    """打印单条评论（基础方法）"""
+    user = format_user_name(comment)
+    content = format_comment_content(comment)
+    meta = format_comment_meta(comment)
+    print(f"{prefix}{user}: {content} {meta}")
+
+
+# ==================== 微博展示 ====================
+
 def display_post_header(post: dict):
     """展示微博信息头"""
     print("=" * 80)
     print(f"微博ID: {post['mid']}")
-    blogger_name = post.get('blogger_nickname') or post.get('nickname') or post.get('uid')
-    print(f"博主: {blogger_name}")
+    print(f"博主UID: {post.get('uid')}")
+    blogger_name = post.get('blogger_nickname') or post.get('nickname') or ''
+    print(f"博主昵称: {Colors.YELLOW}{blogger_name}{Colors.RESET}")
     print(f"发布时间: {post.get('created_at', '未知')}")
-    content = post.get('content') or ''
-    print(f"微博内容: {truncate_text(content, 100)}")
+    content = truncate_text(post.get('content', ''), 100)
+    print(f"微博内容: {Colors.CYAN}{content}{Colors.RESET}")
     print(f"点赞数: {post.get('likes_count', 0)} | 转发数: {post.get('reposts_count', 0)} | 评论数: {post.get('comments_count', 0)}")
     print("=" * 80)
     print()
@@ -54,8 +90,10 @@ def display_blogger_header(blogger: dict, uid: str):
     print()
 
 
+# ==================== 评论展示 ====================
+
 def display_comments(comments: list):
-    """展示评论，按热度排序，支持楼层展示"""
+    """展示评论列表，按热度排序，支持楼层展示"""
     if not comments:
         print("没有找到评论")
         return
@@ -73,54 +111,36 @@ def display_comments(comments: list):
 
     top_level_comments.sort(key=lambda x: x.get('likes_count', 0), reverse=True)
 
-    def print_comment(comment, level=0, floor_number=None):
-        indent = "  " * level
-        is_blogger = comment.get('is_blogger_reply', False)
-        nickname = comment.get('nickname') or comment.get('uid') or '未知用户'
-
-        # 用户名：博主高亮黄色，普通用户浅灰色
-        if is_blogger:
-            user_info = f"{Colors.YELLOW}{nickname}🔥{Colors.RESET}"
-        else:
-            user_info = f"{Colors.GRAY}{nickname}{Colors.RESET}"
-
-        likes_info = f"点赞数 {comment.get('likes_count', 0)}"
-        time_info = comment.get('created_at', '未知')
-
+    def print_comment_tree(comment, level=0, floor_number=None):
         if level == 0:
-            print(f"{indent}[{floor_number}] {user_info}: {comment.get('content', '')} {Colors.GRAY}({time_info} {likes_info}){Colors.RESET}")
+            prefix = f"[{floor_number}] "
         else:
-            print(f"{indent}      ↳ {user_info}: {comment.get('content', '')} {Colors.GRAY}({time_info} {likes_info}){Colors.RESET}")
+            prefix = "  " * level + "      ↳ "
+
+        print_single_comment(comment, prefix)
 
         comment_id = comment.get('comment_id')
         if comment_id and comment_id in replies_map:
             sorted_replies = sorted(replies_map[comment_id], key=lambda x: x.get('likes_count', 0), reverse=True)
             for reply in sorted_replies:
-                print_comment(reply, level + 1)
+                print_comment_tree(reply, level + 1)
 
     for i, comment in enumerate(top_level_comments, 1):
-        print_comment(comment, level=0, floor_number=i)
+        print_comment_tree(comment, level=0, floor_number=i)
 
 
 def display_blogger_comment(comment: dict, index: int, total: int):
-    """
-    展示博主评论（含微博上下文）
-
-    参数:
-        comment: 评论数据（需包含 post_content, post_created_at 等字段）
-        index: 当前索引（从1开始）
-        total: 总数
-    """
+    """展示博主评论（含微博上下文）"""
     print("-" * 80)
 
     post_content = truncate_text(comment.get('post_content', ''), 100)
     post_time = comment.get('post_created_at') or "未知"
-    comment_time = comment.get('created_at') or "未知"
-    likes_info = f"点赞数 {comment.get('likes_count', 0)}"
+    content = format_comment_content(comment)
+    meta = format_comment_meta(comment)
 
     print(f"[{index}/{total}] 微博ID: {comment['mid']}")
     print(f"  📝 {post_content} {Colors.DIM}[{post_time}]{Colors.RESET}")
-    print(f"  💬 {Colors.YELLOW}{comment.get('content', '')}{Colors.RESET}  {Colors.DIM}{likes_info} [{comment_time}]{Colors.RESET}")
+    print(f"  💬 {Colors.YELLOW}{content}{Colors.RESET}  {meta}")
 
     if comment.get('reply_to_comment_id'):
         reply_to_nickname = comment.get('reply_to_nickname')
@@ -133,6 +153,8 @@ def display_blogger_comment(comment: dict, index: int, total: int):
             print(f"  {Colors.CYAN}↳ 回复 {reply_to_info}{Colors.RESET}")
 
 
+# ==================== 抓取统计 ====================
+
 def print_crawl_stats(stats: dict, post: dict = None):
     """打印抓取统计结果"""
     print("-" * 50)
@@ -140,7 +162,6 @@ def print_crawl_stats(stats: dict, post: dict = None):
     print("抓取完成:")
     print(f"  微博: {'新增' if stats['post_saved'] else '已存在'}")
 
-    # 展示微博正文和互动数据
     if post:
         content = truncate_text(post.get('content', ''), 80)
         if content:
@@ -148,16 +169,10 @@ def print_crawl_stats(stats: dict, post: dict = None):
         images = post.get('images', [])
         if images:
             print(f"  图片: {len(images)} 张")
-        reposts = post.get('reposts_count', 0)
-        comments = post.get('comments_count', 0)
-        likes = post.get('likes_count', 0)
-        print(f"  互动: 点赞 {likes} | 转发 {reposts} | 评论 {comments}")
+        print(f"  互动: 点赞 {post.get('likes_count', 0)} | 转发 {post.get('reposts_count', 0)} | 评论 {post.get('comments_count', 0)}")
 
-    if stats['images_downloaded'] > 0:
-        print(f"  微博图片下载: {stats['images_downloaded']} 张")
-    if stats['comment_images_downloaded'] > 0:
-        print(f"  评论图片下载: {stats['comment_images_downloaded']} 张")
 
+# ==================== 数据库统计 ====================
 
 def show_db_status():
     """显示数据库统计信息"""
@@ -187,9 +202,7 @@ def show_recent_posts(limit: int = 10):
     print("\n=== 最近抓取的微博 ===\n")
     for post in posts:
         nickname = post.get('nickname') or post['uid']
-        content = post['content'] or "(无内容)"
-        if len(content) > 100:
-            content = content[:100] + "..."
+        content = truncate_text(post.get('content', ''), 100)
 
         print(f"【{nickname}】{post['created_at']}")
         print(f"  {content}")
