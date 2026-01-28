@@ -11,6 +11,7 @@ import os
 import random
 import signal
 import time
+import threading
 from datetime import datetime, timedelta
 
 from config import CRAWLER_CONFIG, LOG_CONFIG
@@ -65,6 +66,10 @@ class WeiboCrawler:
         self.api = WeiboAPI()
         self.parser = None  # 需要 page 初始化
         self.image_downloader = ImageDownloader()
+        # 后台列表扫描
+        self._list_scan_thread = None
+        self._list_scan_stop = threading.Event()
+        self._list_scan_lock = threading.Lock()
 
     def start(self, url: str = None):
         """启动浏览器"""
@@ -301,9 +306,9 @@ class WeiboCrawler:
             logger.info(f"博主 {uid} 抓取完成")
 
     def _scan_post_list(self, uid: str):
-        """阶段1：扫描微博列表，预存基本数据
+        """阶段1：快速扫描一页微博列表
 
-        从上次扫描位置（list_scan_oldest_mid）开始，向更早方向拉取一批微博
+        只获取一页（约10条），确保有数据可抓，后续由后台线程持续补充
         """
         print()
         print(f"{Colors.BLUE}=== 阶段1：扫描微博列表 ==={Colors.RESET}")
@@ -315,8 +320,8 @@ class WeiboCrawler:
         else:
             logger.info("首次扫描，从最新微博开始")
 
-        # 拉取一批微博（内部会循环调 API 直到 >= max_posts_per_run）
-        posts, _, _ = self.api.get_post_list(uid, since_id=since_id, check_date=True)
+        # 只拉取一页（约10条），后台线程会持续补充
+        posts, _, _ = self.api.get_post_list(uid, since_id=since_id, max_count=10, check_date=True)
 
         if not posts:
             logger.info("没有更多微博")
@@ -336,29 +341,110 @@ class WeiboCrawler:
 
         logger.info(f"列表扫描完成，获取 {len(posts)} 条，新增 {saved_count} 条")
 
-    def _crawl_pending_details(self, uid: str, stable_days: int):
-        """阶段2：抓取未抓详情的微博（detail_status=0 且超过 stable_days）"""
-        print()
-        print(f"{Colors.BLUE}=== 阶段2：抓取微博详情 ==={Colors.RESET}")
+    def _background_list_scanner(self, uid: str):
+        """后台线程：持续扫描微博列表"""
+        total_fetched = 0
+        total_saved = 0
 
-        max_count = CRAWLER_CONFIG.get("max_posts_per_run", 50)
-        pending_posts = get_posts_pending_detail(uid, stable_days, limit=max_count)
-        if not pending_posts:
-            logger.info("没有需要抓取详情的微博")
+        while not self._list_scan_stop.is_set():
+            try:
+                with self._list_scan_lock:
+                    since_id = get_list_scan_oldest_mid(uid)
+
+                # 获取一页微博（每次约10条）
+                posts, next_since_id, reached_cutoff = self.api.get_post_list(
+                    uid, since_id=since_id, max_count=20, check_date=True
+                )
+
+                if not posts:
+                    logger.info("[后台扫描] 没有更多微博，扫描完成")
+                    break
+
+                # 保存到数据库
+                saved_count = 0
+                oldest_mid = None
+                with self._list_scan_lock:
+                    for post in posts:
+                        oldest_mid = post["mid"]
+                        if save_post_from_list(post):
+                            saved_count += 1
+                    if oldest_mid:
+                        update_list_scan_oldest_mid(uid, oldest_mid)
+
+                total_fetched += len(posts)
+                total_saved += saved_count
+                logger.info(f"[后台扫描] +{len(posts)} 条 (新增 {saved_count})，累计: {total_fetched} 条")
+
+                if reached_cutoff:
+                    logger.info("[后台扫描] 已到达时间边界，扫描完成")
+                    break
+
+                # 间隔避免触发限流
+                time.sleep(15)
+
+            except Exception as e:
+                logger.error(f"[后台扫描] 出错: {e}")
+                time.sleep(2)
+
+        logger.info(f"[后台扫描] 结束，共获取 {total_fetched} 条，新增 {total_saved} 条")
+
+    def _start_background_scanner(self, uid: str):
+        """启动后台列表扫描线程"""
+        if self._list_scan_thread and self._list_scan_thread.is_alive():
             return
 
-        logger.info(f"待抓取详情的微博: {len(pending_posts)} 条")
+        self._list_scan_stop.clear()
+        self._list_scan_thread = threading.Thread(
+            target=self._background_list_scanner,
+            args=(uid,),
+            daemon=True
+        )
+        self._list_scan_thread.start()
+        logger.info("[后台扫描] 已启动")
+
+    def _stop_background_scanner(self):
+        """停止后台列表扫描线程"""
+        if not self._list_scan_thread:
+            return
+
+        self._list_scan_stop.set()
+        self._list_scan_thread.join(timeout=5)
+        self._list_scan_thread = None
+        logger.info("[后台扫描] 已停止")
+
+    def _crawl_pending_details(self, uid: str, stable_days: int):
+        """阶段2：抓取未抓详情的微博（detail_status=0 且超过 stable_days）
+
+        同时启动后台线程持续扫描列表，实现并行化
+        """
         print()
+        print(f"{Colors.BLUE}=== 阶段2：抓取微博详情（后台同时扫描列表）==={Colors.RESET}")
 
-        for i, post in enumerate(pending_posts):
-            mid = post["mid"]
-            logger.info(f"[{i+1}/{len(pending_posts)}] 抓取: {mid}")
+        # 启动后台列表扫描
+        self._start_background_scanner(uid)
 
-            self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False)
-            mark_post_detail_done(mid)
-            self._random_delay()
+        try:
+            max_count = CRAWLER_CONFIG.get("max_posts_per_run", 50)
+            pending_posts = get_posts_pending_detail(uid, stable_days, limit=max_count)
+            if not pending_posts:
+                logger.info("没有需要抓取详情的微博")
+                return
 
-        logger.info(f"博主 {uid} 抓取完成")
+            logger.info(f"待抓取详情的微博: {len(pending_posts)} 条")
+            print()
+
+            for i, post in enumerate(pending_posts):
+                mid = post["mid"]
+                logger.info(f"[{i+1}/{len(pending_posts)}] 抓取: {mid}")
+
+                self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False)
+                mark_post_detail_done(mid)
+                self._random_delay()
+
+            logger.info(f"博主 {uid} 详情抓取完成")
+        finally:
+            # 确保停止后台扫描
+            self._stop_background_scanner()
 
     def _scroll_and_click_hot_button(self) -> bool:
         """滚动并点击「按热度」按钮"""

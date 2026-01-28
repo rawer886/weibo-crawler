@@ -200,6 +200,9 @@ class WeiboAPI:
                     logger.info("没有更多微博了")
                     break
 
+                page_has_valid_posts = False
+                skipped_old_posts = 0
+
                 for card in cards:
                     if card.get("card_type") != 9:
                         continue
@@ -211,22 +214,28 @@ class WeiboAPI:
 
                     post = self._parse_post_from_api(mblog, uid)
 
-                    # 检查时间范围
+                    # 检查时间范围（跳过超时的，继续处理当前页）
                     if check_date and post["created_at"]:
                         try:
                             post_date = datetime.strptime(post["created_at"], "%Y-%m-%d %H:%M")
                             if post_date < cutoff_date:
-                                logger.info(f"微博 {mid} 已超出 {max_days} 天范围，停止抓取")
-                                reached_cutoff = True
-                                break
+                                skipped_old_posts += 1
+                                continue  # 跳过旧微博，继续处理当前页
                         except:
                             pass
 
                     posts.append(post)
+                    page_has_valid_posts = True
                     if len(posts) >= max_count:
                         break
 
-                if reached_cutoff:
+                if skipped_old_posts > 0:
+                    logger.info(f"跳过 {skipped_old_posts} 条超出 {max_days} 天范围的微博")
+
+                # 如果整页都没有有效微博，说明已经到达时间边界
+                if not page_has_valid_posts and skipped_old_posts > 0:
+                    logger.info("当前页全部超出时间范围，停止获取下一页")
+                    reached_cutoff = True
                     break
 
                 # 获取下一页 since_id
@@ -238,7 +247,7 @@ class WeiboAPI:
                     break
 
                 page += 1
-                time.sleep(1.5)
+                time.sleep(1)
 
             except Exception as e:
                 logger.error(f"获取微博列表失败: {e}")
