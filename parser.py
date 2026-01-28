@@ -55,7 +55,7 @@ class PageParser:
 
     def parse_post(self, uid: str, mid: str, source_url: str = None) -> Optional[dict]:
         """从详情页解析微博信息"""
-        logger.info(f"从详情页解析微博信息: {mid}")
+        logger.info(f"从详情页解析微博信息")
 
         try:
             # 等待页面加载
