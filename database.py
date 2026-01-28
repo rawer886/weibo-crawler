@@ -44,18 +44,18 @@ def init_database():
             CREATE TABLE IF NOT EXISTS posts (
                 mid TEXT PRIMARY KEY,
                 uid TEXT NOT NULL,
-                content TEXT,
                 created_at TEXT,
                 reposts_count INTEGER DEFAULT 0,
                 comments_count INTEGER DEFAULT 0,
                 likes_count INTEGER DEFAULT 0,
                 is_repost INTEGER DEFAULT 0,
-                repost_content TEXT,
-                repost_media TEXT,
-                media TEXT,
                 source_url TEXT,
                 detail_status INTEGER DEFAULT 0,
                 crawled_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                content TEXT,
+                repost_content TEXT,
+                media TEXT,
+                repost_media TEXT,
                 FOREIGN KEY (uid) REFERENCES bloggers(uid)
             )
         """)
@@ -140,36 +140,53 @@ def _insert_post(cursor, post: dict, detail_status: int = 1):
     repost_media = _build_media(post.get("repost_images", []), post.get("repost_video"))
 
     cursor.execute("""
-        INSERT INTO posts (mid, uid, content, created_at, reposts_count,
-                         comments_count, likes_count, is_repost,
-                         repost_content, repost_media, media, source_url, detail_status)
+        INSERT INTO posts (mid, uid, created_at, reposts_count, comments_count,
+                         likes_count, is_repost, source_url, detail_status,
+                         content, repost_content, media, repost_media)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         post["mid"],
         post["uid"],
-        post.get("content"),
         post.get("created_at"),
         post.get("reposts_count", 0),
         post.get("comments_count", 0),
         post.get("likes_count", 0),
         1 if post.get("is_repost") else 0,
-        post.get("repost_content"),
-        _serialize_media(repost_media),
-        _serialize_media(media),
         post.get("source_url"),
         detail_status,
+        post.get("content"),
+        post.get("repost_content"),
+        _serialize_media(media),
+        _serialize_media(repost_media),
     ))
 
 
-def save_post(post: dict) -> bool:
-    """保存微博，已存在则跳过。返回 True 表示新增"""
+def save_post(post: dict, stable_days: int = None) -> bool:
+    """保存微博，已存在则跳过。返回 True 表示新增
+
+    参数:
+        stable_days: 如果提供，则发布时间在 stable_days 内的微博 detail_status 设为 0
+    """
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT 1 FROM posts WHERE mid = ?", (post["mid"],))
         if cursor.fetchone():
             return False
 
-        _insert_post(cursor, post, detail_status=1)
+        # 根据时间判断 detail_status
+        detail_status = 1
+        if stable_days is not None:
+            created_at = post.get("created_at")
+            if created_at:
+                try:
+                    post_date = datetime.strptime(created_at, "%Y-%m-%d %H:%M")
+                    cutoff = datetime.now() - timedelta(days=stable_days)
+                    if post_date >= cutoff:
+                        detail_status = 0
+                except Exception:
+                    pass
+
+        _insert_post(cursor, post, detail_status=detail_status)
         conn.commit()
         return True
 

@@ -9,7 +9,7 @@ import logging
 import time
 
 from config import CRAWLER_CONFIG
-from database import init_database, mark_post_detail_done
+from database import init_database
 from crawler import WeiboCrawler
 from display import show_db_status
 
@@ -60,8 +60,9 @@ def crawl_single_post(url: str, uid: str, mid: str):
             return
 
         print()
-        crawler.crawl_single_post(uid, numeric_mid, source_url=url, skip_navigation=True)
-        mark_post_detail_done(numeric_mid)
+        stable_days = CRAWLER_CONFIG.get("stable_days", 1)
+        crawler.crawl_single_post(uid, numeric_mid, source_url=url, skip_navigation=True,
+                                  stable_days=stable_days)
         input("\n按回车键退出浏览器...")
 
     finally:
