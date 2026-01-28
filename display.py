@@ -35,7 +35,7 @@ def format_comment_content(comment: dict) -> str:
     """格式化评论内容，包含图片标记"""
     content = comment.get('content', '')
     if comment.get('images'):
-        content += ' [图片]'
+        content += f' {Colors.CYAN}[图片]{Colors.RESET}'
     return content
 
 
@@ -153,23 +153,33 @@ def display_blogger_comment(comment: dict, index: int, total: int):
             print(f"  {Colors.CYAN}↳ 回复 {reply_to_info}{Colors.RESET}")
 
 
-# ==================== 抓取统计 ====================
+# ==================== 抓取结果展示 ====================
 
-def print_crawl_stats(stats: dict, post: dict = None):
-    """打印抓取统计结果"""
-    print("-" * 50)
+def display_post_with_comments(mid: str, blogger_only: bool = False):
+    """展示微博及评论（从数据库读取）
+
+    参数:
+        mid: 微博ID
+        blogger_only: 只展示博主评论
+    """
+    from database import get_post_with_blogger, get_comments_by_mid
+
+    post = get_post_with_blogger(mid)
+    if not post:
+        print(f"未找到微博: {mid}")
+        return
+
+    display_post_header(post)
+
+    comments = get_comments_by_mid(mid, blogger_only=blogger_only)
+    if not comments:
+        print("该微博下没有博主评论" if blogger_only else "该微博下没有评论")
+        return
+
+    label = "博主评论" if blogger_only else "评论"
+    print(f"共 {len(comments)} 条{label}（按热度排序）：")
     print()
-    print("抓取完成:")
-    print(f"  微博: {'新增' if stats['post_saved'] else '已存在'}")
-
-    if post:
-        content = truncate_text(post.get('content', ''), 80)
-        if content:
-            print(f"  正文: {Colors.CYAN}{content}{Colors.RESET}")
-        images = post.get('images', [])
-        if images:
-            print(f"  图片: {len(images)} 张")
-        print(f"  互动: 点赞 {post.get('likes_count', 0)} | 转发 {post.get('reposts_count', 0)} | 评论 {post.get('comments_count', 0)}")
+    display_comments(comments)
 
 
 # ==================== 数据库统计 ====================

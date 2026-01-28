@@ -20,12 +20,14 @@ from database import (
     update_crawl_progress, update_post_local_images, update_post_repost_local_images,
     set_comment_pending, get_pending_comment_posts,
     clear_comment_pending, delete_comments_by_mid,
-    update_comment_likes, get_next_since_id, update_next_since_id
+    update_comment_likes, get_next_since_id, update_next_since_id,
+    get_blogger
 )
 from browser import BrowserManager
 from api import WeiboAPI
 from parser import PageParser
 from image import ImageDownloader
+from display import display_post_with_comments
 
 
 # 信号处理
@@ -94,11 +96,13 @@ class WeiboCrawler:
         """从当前页面解析数字 mid"""
         return self.parser.parse_numeric_mid()
 
-    def crawl_single_post(self, uid: str, mid: str, source_url: str = None, skip_navigation: bool = False) -> dict:
+    def crawl_single_post(self, uid: str, mid: str, source_url: str = None,
+                         skip_navigation: bool = False, skip_blogger_check: bool = False) -> dict:
         """抓取单条微博
 
         参数:
             skip_navigation: 跳过页面导航（当页面已在目标位置时使用）
+            skip_blogger_check: 跳过博主信息检查（批量抓取时已在入口处处理）
         """
         result = {
             "post": None,
@@ -125,10 +129,9 @@ class WeiboCrawler:
             self.browser.goto(url)
             time.sleep(5)
 
-        # 2. 保存博主信息
-        blogger_info = self.api.get_blogger_info(uid)
-        if blogger_info:
-            save_blogger(blogger_info)
+        # 2. 保存博主信息（仅在数据库中不存在时调用API）
+        if not skip_blogger_check:
+            self._ensure_blogger_exists(uid)
 
         # 3. 解析微博内容
         post = self.parser.parse_post(uid, mid, source_url=source_url)
@@ -151,12 +154,8 @@ class WeiboCrawler:
         if post and post.get("content"):
             is_new = save_post(post)
             result["stats"]["post_saved"] = is_new
-            content_preview = post.get("content", "")[:30] + "..." if len(post.get("content", "")) > 30 else post.get("content", "")
             if is_new:
-                logger.info(f"微博已保存: {mid} - {content_preview}")
                 update_crawl_progress(uid, mid, post.get("created_at", ""), is_newer=mark_pending)
-            else:
-                logger.info(f"微博已存在: {mid} - {content_preview}")
 
             # 4. 下载微博图片
             if post.get("images"):
@@ -174,19 +173,18 @@ class WeiboCrawler:
         else:
             logger.warning(f"微博内容为空，跳过保存: {mid}")
 
-        print()
-
         # 6. 抓取评论（评论数为 0 时跳过）
         comments_count = post.get("comments_count", 0) if post else 0
         if comments_count > 0:
+            print()
             # 滚动并点击「按热度」
             if self._scroll_and_click_hot_button():
                 time.sleep(2)
 
+            logger.info("等待评论加载...")
             time.sleep(5)
 
             # 抓取评论（两轮）
-            print()
             all_comments = {}
             comments, main_count = self.parser.parse_comments(mid, uid)
             for c in comments:
@@ -233,21 +231,7 @@ class WeiboCrawler:
                         result["stats"]["comments_updated"] += 1
 
             # 输出评论保存统计
-            saved_count = result['stats']['comments_saved']
-            updated_count = result['stats']['comments_updated']
-            images_count = result['stats']['comment_images_downloaded']
-
-            # 构建日志消息
-            parts = []
-            if saved_count > 0:
-                parts.append(f"新增 {saved_count} 条")
-            if updated_count > 0:
-                parts.append(f"更新 {updated_count} 条点赞")
-            if images_count > 0:
-                parts.append(f"下载 {images_count} 张图片")
-
-            if parts:
-                logger.info(f"评论: {', '.join(parts)}")
+            self._log_comment_stats(result["stats"])
         else:
             logger.info("评论数为 0，跳过评论抓取")
 
@@ -256,8 +240,11 @@ class WeiboCrawler:
             set_comment_pending(mid, True)
             result["stats"]["mark_pending"] = True
 
+        # 8. 展示抓取结果（从数据库读取）
         print()
-        logger.info(f"微博 {mid} 抓取结束")
+        logger.info("抓取完成")
+        print()
+        display_post_with_comments(mid)
         return result
 
     def _parse_post_date(self, post: dict) -> datetime:
@@ -283,13 +270,13 @@ class WeiboCrawler:
         stable_days = CRAWLER_CONFIG.get("stable_days", 1)
         stable_cutoff = datetime.now() - timedelta(days=stable_days)
 
-        # 获取博主信息
         logger.info(f"开始抓取博主: {uid}, 模式: {mode}")
-        blogger_info = self.api.get_blogger_info(uid)
+
+        # 确保博主信息已入库
+        blogger_info = self._ensure_blogger_exists(uid)
         if not blogger_info:
             logger.error(f"无法获取博主信息: {uid}")
             return
-        save_blogger(blogger_info)
 
         # 获取已抓取的最老微博（仅供参考）
         oldest_mid = get_blogger_oldest_mid(uid)
@@ -385,7 +372,7 @@ class WeiboCrawler:
         for i, post in enumerate(posts_to_process):
             mid = post["mid"]
             logger.info(f"处理第 {i+1}/{len(posts_to_process)} 条微博: {mid}")
-            self.crawl_single_post(uid, mid)
+            self.crawl_single_post(uid, mid, skip_blogger_check=True)
             self._random_delay()
 
         logger.info(f"博主 {uid} 抓取完成")
@@ -404,7 +391,7 @@ class WeiboCrawler:
             old_count = delete_comments_by_mid(mid)
             logger.info(f"清除旧评论 {old_count} 条")
 
-            result = self.crawl_single_post(uid, mid)
+            result = self.crawl_single_post(uid, mid, skip_blogger_check=True)
             logger.info(f"保存了 {result['stats']['comments_saved']} 条新评论")
 
             clear_comment_pending(mid)
@@ -435,6 +422,31 @@ class WeiboCrawler:
         except Exception as e:
             logger.warning(f"操作失败: {e}")
             return False
+
+    def _ensure_blogger_exists(self, uid: str):
+        """确保博主信息已入库"""
+        blogger = get_blogger(uid)
+        if blogger:
+            logger.info(f"博主信息已入库: {blogger.get('nickname', uid)}")
+            return blogger
+
+        blogger_info = self.api.get_blogger_info(uid)
+        if blogger_info:
+            save_blogger(blogger_info)
+            logger.info(f"博主信息入库: {blogger_info.get('nickname', uid)}")
+        return blogger_info
+
+    def _log_comment_stats(self, stats: dict):
+        """输出评论保存统计日志"""
+        parts = []
+        if stats.get('comments_saved'):
+            parts.append(f"新增 {stats['comments_saved']} 条")
+        if stats.get('comments_updated'):
+            parts.append(f"更新 {stats['comments_updated']} 条点赞")
+        if stats.get('comment_images_downloaded'):
+            parts.append(f"下载 {stats['comment_images_downloaded']} 张图片")
+        if parts:
+            logger.info(f"评论保存: {', '.join(parts)}")
 
     def _random_delay(self, base_delay: float = None):
         """随机延迟"""
