@@ -54,7 +54,7 @@ def init_database():
                 repost_media TEXT,
                 media TEXT,
                 source_url TEXT,
-                comment_pending INTEGER DEFAULT 0,
+                detail_status INTEGER DEFAULT 0,
                 crawled_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (uid) REFERENCES bloggers(uid)
             )
@@ -85,11 +85,7 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS crawl_progress (
                 uid TEXT PRIMARY KEY,
-                newest_mid TEXT,
-                oldest_mid TEXT,
-                newest_created_at TEXT,
-                oldest_created_at TEXT,
-                next_since_id TEXT,
+                list_scan_oldest_mid TEXT,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -100,7 +96,6 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_comments_likes ON comments(likes_count)")
 
         conn.commit()
-        logger.info("数据库初始化完成")
 
 
 def save_blogger(blogger: dict):
@@ -139,6 +134,33 @@ def _serialize_media(media: Optional[dict]) -> Optional[str]:
     return json.dumps(media, ensure_ascii=False) if media else None
 
 
+def _insert_post(cursor, post: dict, detail_status: int = 1):
+    """插入微博记录（内部函数）"""
+    media = _build_media(post.get("images", []), post.get("video"))
+    repost_media = _build_media(post.get("repost_images", []), post.get("repost_video"))
+
+    cursor.execute("""
+        INSERT INTO posts (mid, uid, content, created_at, reposts_count,
+                         comments_count, likes_count, is_repost,
+                         repost_content, repost_media, media, source_url, detail_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        post["mid"],
+        post["uid"],
+        post.get("content"),
+        post.get("created_at"),
+        post.get("reposts_count", 0),
+        post.get("comments_count", 0),
+        post.get("likes_count", 0),
+        1 if post.get("is_repost") else 0,
+        post.get("repost_content"),
+        _serialize_media(repost_media),
+        _serialize_media(media),
+        post.get("source_url"),
+        detail_status,
+    ))
+
+
 def save_post(post: dict) -> bool:
     """保存微博，已存在则跳过。返回 True 表示新增"""
     with get_connection() as conn:
@@ -147,28 +169,7 @@ def save_post(post: dict) -> bool:
         if cursor.fetchone():
             return False
 
-        media = _build_media(post.get("images", []), post.get("video"))
-        repost_media = _build_media(post.get("repost_images", []), post.get("repost_video"))
-
-        cursor.execute("""
-            INSERT INTO posts (mid, uid, content, created_at, reposts_count,
-                             comments_count, likes_count, is_repost,
-                             repost_content, repost_media, media, source_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            post["mid"],
-            post["uid"],
-            post.get("content"),
-            post.get("created_at"),
-            post.get("reposts_count", 0),
-            post.get("comments_count", 0),
-            post.get("likes_count", 0),
-            1 if post.get("is_repost") else 0,
-            post.get("repost_content"),
-            _serialize_media(repost_media),
-            _serialize_media(media),
-            post.get("source_url"),
-        ))
+        _insert_post(cursor, post, detail_status=1)
         conn.commit()
         return True
 
@@ -338,75 +339,6 @@ def get_recent_posts(limit: int = 20) -> list:
         return [dict(row) for row in cursor.fetchall()]
 
 
-def get_crawl_progress(uid: str) -> Optional[dict]:
-    """获取某博主的抓取进度"""
-    with get_connection() as conn:
-        row = conn.execute("SELECT * FROM crawl_progress WHERE uid = ?", (uid,)).fetchone()
-        return dict(row) if row else None
-
-
-def update_crawl_progress(uid: str, mid: str, created_at: str, is_newer: bool):
-    """更新抓取进度。is_newer=True 更新最新边界，False 更新最老边界"""
-    with get_connection() as conn:
-        row = conn.execute("SELECT * FROM crawl_progress WHERE uid = ?", (uid,)).fetchone()
-        now = datetime.now().isoformat()
-
-        if row is None:
-            conn.execute("""
-                INSERT INTO crawl_progress (uid, newest_mid, oldest_mid, newest_created_at, oldest_created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (uid, mid, mid, created_at, created_at, now))
-        elif is_newer:
-            conn.execute("""
-                UPDATE crawl_progress SET newest_mid = ?, newest_created_at = ?, updated_at = ? WHERE uid = ?
-            """, (mid, created_at, now, uid))
-        else:
-            conn.execute("""
-                UPDATE crawl_progress SET oldest_mid = ?, oldest_created_at = ?, updated_at = ? WHERE uid = ?
-            """, (mid, created_at, now, uid))
-
-        conn.commit()
-
-
-def get_blogger_oldest_mid(uid: str) -> Optional[str]:
-    """获取某博主已抓取的最老微博ID"""
-    with get_connection() as conn:
-        row = conn.execute("""
-            SELECT mid FROM posts WHERE uid = ? ORDER BY created_at ASC LIMIT 1
-        """, (uid,)).fetchone()
-        return row[0] if row else None
-
-
-def get_next_since_id(uid: str) -> Optional[str]:
-    """获取断点续抓的 since_id（API 分页游标）"""
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT next_since_id FROM crawl_progress WHERE uid = ?", (uid,)
-        ).fetchone()
-        return row[0] if row and row[0] else None
-
-
-def update_next_since_id(uid: str, since_id: str):
-    """更新断点续抓的 since_id"""
-    with get_connection() as conn:
-        now = datetime.now().isoformat()
-        conn.execute("""
-            INSERT INTO crawl_progress (uid, next_since_id, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(uid) DO UPDATE SET next_since_id = ?, updated_at = ?
-        """, (uid, since_id, now, since_id, now))
-        conn.commit()
-
-
-def get_blogger_newest_mid(uid: str) -> Optional[str]:
-    """获取某博主已抓取的最新微博ID"""
-    with get_connection() as conn:
-        row = conn.execute("""
-            SELECT mid FROM posts WHERE uid = ? ORDER BY created_at DESC LIMIT 1
-        """, (uid,)).fetchone()
-        return row[0] if row else None
-
-
 def _update_media_local_images(mid: str, local_images: list, column: str):
     """更新媒体字段中图片的本地路径（内部函数）"""
     with get_connection() as conn:
@@ -439,33 +371,6 @@ def update_post_local_images(mid: str, local_images: list):
 def update_post_repost_local_images(mid: str, local_images: list):
     """更新原微博的本地图片路径"""
     _update_media_local_images(mid, local_images, "repost_media")
-
-
-def set_comment_pending(mid: str, pending: bool = True):
-    """设置微博的评论待更新标记"""
-    with get_connection() as conn:
-        conn.execute("UPDATE posts SET comment_pending = ? WHERE mid = ?", (1 if pending else 0, mid))
-        conn.commit()
-
-
-def get_pending_comment_posts(uid: str, stable_days: int) -> list:
-    """获取需要更新评论的微博（发布时间超过 stable_days 天且 comment_pending=1）"""
-    cutoff_date = (datetime.now() - timedelta(days=stable_days)).strftime("%Y-%m-%d %H:%M")
-    with get_connection() as conn:
-        cursor = conn.execute("""
-            SELECT mid, uid, content, created_at, comments_count
-            FROM posts
-            WHERE uid = ? AND comment_pending = 1 AND created_at < ?
-            ORDER BY created_at DESC
-        """, (uid, cutoff_date))
-        return [dict(row) for row in cursor.fetchall()]
-
-
-def clear_comment_pending(mid: str):
-    """清除微博的评论待更新标记"""
-    with get_connection() as conn:
-        conn.execute("UPDATE posts SET comment_pending = 0 WHERE mid = ?", (mid,))
-        conn.commit()
 
 
 def delete_comments_by_mid(mid: str) -> int:
@@ -550,3 +455,109 @@ def get_blogger_comments(uid: str) -> list:
             ORDER BY c.created_at DESC
         """, (uid,))
         return [dict(row) for row in cursor.fetchall()]
+
+
+# ==================== 两阶段抓取相关函数 ====================
+
+
+def save_post_from_list(post: dict) -> bool:
+    """从列表数据保存微博（detail_status=0），已存在则跳过。返回 True 表示新增"""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM posts WHERE mid = ?", (post["mid"],))
+        if cursor.fetchone():
+            return False
+
+        _insert_post(cursor, post, detail_status=0)
+        conn.commit()
+        return True
+
+
+def get_posts_pending_detail(uid: str, stable_days: int, limit: int = 50) -> list:
+    """获取需要抓取详情的微博
+
+    条件：detail_status=0（未抓详情）且超过 stable_days
+    按 created_at DESC 排序
+    """
+    cutoff_date = (datetime.now() - timedelta(days=stable_days)).strftime("%Y-%m-%d %H:%M")
+    with get_connection() as conn:
+        cursor = conn.execute("""
+            SELECT mid, uid, content, created_at, comments_count, detail_status
+            FROM posts
+            WHERE uid = ? AND created_at < ? AND detail_status = 0
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (uid, cutoff_date, limit))
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def mark_post_detail_done(mid: str):
+    """标记微博详情已抓取，只设置 detail_status=1"""
+    with get_connection() as conn:
+        conn.execute("UPDATE posts SET detail_status = 1 WHERE mid = ?", (mid,))
+        conn.commit()
+
+
+def get_list_scan_oldest_mid(uid: str) -> Optional[str]:
+    """获取列表扫描的最老微博 ID"""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT list_scan_oldest_mid FROM crawl_progress WHERE uid = ?", (uid,)
+        ).fetchone()
+        return row[0] if row and row[0] else None
+
+
+def update_list_scan_oldest_mid(uid: str, mid: str):
+    """更新列表扫描进度"""
+    with get_connection() as conn:
+        now = datetime.now().isoformat()
+        conn.execute("""
+            INSERT INTO crawl_progress (uid, list_scan_oldest_mid, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(uid) DO UPDATE SET list_scan_oldest_mid = ?, updated_at = ?
+        """, (uid, mid, now, mid, now))
+        conn.commit()
+
+
+def get_blogger_stats(uid: str) -> Optional[dict]:
+    """获取博主的详细统计信息"""
+    with get_connection() as conn:
+        # 博主基本信息
+        blogger = conn.execute(
+            "SELECT * FROM bloggers WHERE uid = ?", (uid,)
+        ).fetchone()
+        if not blogger:
+            return None
+
+        # 微博统计
+        posts_stats = conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN detail_status = 0 THEN 1 ELSE 0 END) as pending_detail,
+                SUM(CASE WHEN detail_status = 1 THEN 1 ELSE 0 END) as detail_done,
+                MIN(created_at) as oldest_post_time,
+                MAX(created_at) as newest_post_time
+            FROM posts WHERE uid = ?
+        """, (uid,)).fetchone()
+
+        # 评论统计
+        comments_stats = conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN is_blogger_reply = 1 THEN 1 ELSE 0 END) as blogger_replies
+            FROM comments c
+            JOIN posts p ON c.mid = p.mid
+            WHERE p.uid = ?
+        """, (uid,)).fetchone()
+
+        # 抓取进度
+        progress = conn.execute(
+            "SELECT * FROM crawl_progress WHERE uid = ?", (uid,)
+        ).fetchone()
+
+        return {
+            "blogger": dict(blogger),
+            "posts": dict(posts_stats) if posts_stats else {},
+            "comments": dict(comments_stats) if comments_stats else {},
+            "progress": dict(progress) if progress else {}
+        }

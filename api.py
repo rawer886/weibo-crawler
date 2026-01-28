@@ -188,8 +188,7 @@ class WeiboAPI:
 
             cache_key = f"posts_{uid}_{current_since_id or 'first'}"
 
-            cache_hint = self._format_cache_hint(cache_max_age)
-            logger.info(f"获取第 {page} 页微博列表{cache_hint}")
+            logger.info(f"获取第 {page} 页微博列表")
             data = self._fetch_with_cache(url, cache_key, max_age=cache_max_age)
 
             try:
@@ -286,14 +285,6 @@ class WeiboAPI:
                 post["images"].append(large_url)
 
         return post
-
-    def _format_cache_hint(self, cache_max_age: float) -> str:
-        """格式化缓存提示信息"""
-        if cache_max_age == 0:
-            return "（不使用缓存）"
-        if cache_max_age is not None and cache_max_age > 0:
-            return f"（缓存有效期: {cache_max_age/3600:.0f}h）"
-        return ""
 
     def _clean_html(self, html_text: str) -> str:
         """清理 HTML 标签"""
