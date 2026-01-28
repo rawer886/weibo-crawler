@@ -4,6 +4,7 @@
 
 用法:
     python main.py https://weibo.com/1497035431/AbCdEfGhI       # 抓取单条微博
+    python main.py https://weibo.com/1497035431                # 批量抓取用户微博
     python main.py https://weibo.com/u/1497035431              # 批量抓取用户微博
     python main.py https://weibo.com/u/1497035431 --mode new   # 抓取最新微博
     python main.py https://weibo.com/u/1497035431 --mode sync  # 同步校验缺失微博
@@ -23,9 +24,9 @@ def parse_weibo_url(url: str) -> dict:
     """解析微博 URL，返回类型和参数
 
     支持的格式:
-    - https://weibo.com/u/1497035431          -> {"type": "user", "uid": "3689493785"}
-    - https://weibo.com/1497035431/AbCdEfGhI  -> {"type": "post", "uid": "3689493785", "mid": "QogZOCUm5"}
-    - https://weibo.com/3689493785/5234567890 -> {"type": "post", "uid": "3689493785", "mid": "5234567890"}
+    - https://weibo.com/u/1497035431          -> {"type": "user", "uid": "1497035431"}
+    - https://weibo.com/1497035431            -> {"type": "user", "uid": "1497035431"}
+    - https://weibo.com/1497035431/AbCdEfGhI  -> {"type": "post", "uid": "1497035431", "mid": "AbCdEfGhI"}
     """
     # 用户主页: /u/数字
     user_match = re.search(r'weibo\.com/u/(\d+)', url)
@@ -36,6 +37,11 @@ def parse_weibo_url(url: str) -> dict:
     post_match = re.search(r'weibo\.com/(\d+)/(\w+)', url)
     if post_match:
         return {"type": "post", "uid": post_match.group(1), "mid": post_match.group(2)}
+
+    # 用户主页: /数字 (不带 /u/ 前缀)
+    user_short_match = re.search(r'weibo\.com/(\d+)/?$', url)
+    if user_short_match:
+        return {"type": "user", "uid": user_short_match.group(1)}
 
     return {"type": "unknown"}
 
@@ -85,6 +91,7 @@ def main():
     else:
         print(f"无法解析 URL: {args.url}")
         print("\n支持的格式:")
+        print("  https://weibo.com/1497035431            # 用户主页")
         print("  https://weibo.com/u/1497035431          # 用户主页")
         print("  https://weibo.com/1497035431/AbCdEfGhI  # 单条微博")
         sys.exit(1)

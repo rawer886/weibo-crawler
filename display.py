@@ -155,12 +155,13 @@ def display_blogger_comment(comment: dict, index: int, total: int):
 
 # ==================== 抓取结果展示 ====================
 
-def display_post_with_comments(mid: str, blogger_only: bool = False):
+def display_post_with_comments(mid: str, blogger_only: bool = False, show_comments: bool = True):
     """展示微博及评论（从数据库读取）
 
     参数:
         mid: 微博ID
         blogger_only: 只展示博主评论
+        show_comments: 是否展示评论
     """
     from database import get_post_with_blogger, get_comments_by_mid
 
@@ -170,6 +171,9 @@ def display_post_with_comments(mid: str, blogger_only: bool = False):
         return
 
     display_post_header(post)
+
+    if not show_comments:
+        return
 
     comments = get_comments_by_mid(mid, blogger_only=blogger_only)
     if not comments:
