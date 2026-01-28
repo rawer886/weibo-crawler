@@ -96,13 +96,14 @@ class WeiboCrawler:
 
     def crawl_single_post(self, uid: str, mid: str, source_url: str = None,
                          skip_navigation: bool = False, skip_blogger_check: bool = False,
-                         show_comments: bool = True) -> dict:
+                         show_comments: bool = True, stable_days: int = None) -> dict:
         """抓取单条微博
 
         参数:
             skip_navigation: 跳过页面导航（当页面已在目标位置时使用）
             skip_blogger_check: 跳过博主信息检查（批量抓取时已在入口处处理）
             show_comments: 展示评论（批量抓取时设为 False）
+            stable_days: 如果提供，则发布时间在 stable_days 内的微博 detail_status 设为 0
         """
         result = {
             "post": None,
@@ -138,7 +139,7 @@ class WeiboCrawler:
 
         # 3. 保存微博
         if post and post.get("content"):
-            is_new = save_post(post)
+            is_new = save_post(post, stable_days=stable_days)
             result["stats"]["post_saved"] = is_new
 
             # 4. 下载微博图片
@@ -293,8 +294,8 @@ class WeiboCrawler:
             for i, post in enumerate(posts_to_process):
                 mid = post["mid"]
                 logger.info(f"处理第 {i+1}/{len(posts_to_process)} 条微博: {mid}")
-                self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False)
-                mark_post_detail_done(mid)
+                self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False,
+                                       stable_days=stable_days)
                 self._random_delay()
 
             logger.info(f"博主 {uid} 抓取完成")
