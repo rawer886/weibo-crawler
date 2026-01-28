@@ -20,7 +20,7 @@ from database import (
     update_crawl_progress, update_post_local_images, update_post_repost_local_images,
     set_comment_pending, get_pending_comment_posts,
     clear_comment_pending, clear_comments_for_post,
-    update_comment_likes
+    update_comment_likes, get_next_since_id, update_next_since_id
 )
 from browser import BrowserManager
 from api import WeiboAPI
@@ -94,8 +94,12 @@ class WeiboCrawler:
         """从当前页面解析数字 mid"""
         return self.parser.parse_numeric_mid()
 
-    def crawl_single_post(self, uid: str, mid: str, source_url: str = None) -> dict:
-        """抓取单条微博"""
+    def crawl_single_post(self, uid: str, mid: str, source_url: str = None, skip_navigation: bool = False) -> dict:
+        """抓取单条微博
+
+        参数:
+            skip_navigation: 跳过页面导航（当页面已在目标位置时使用）
+        """
         result = {
             "post": None,
             "comments": [],
@@ -114,12 +118,8 @@ class WeiboCrawler:
         if source_url is None:
             source_url = f"https://weibo.com/{uid}/{mid}"
 
-        # 1. 检查是否需要访问详情页
-        # 如果当前页面 URL 包含 uid，说明已经在该用户的微博页面上，无需再次导航
-        # （密文 mid 和数字 mid 指向同一条微博）
-        current_url = self.browser.page.url
-        already_on_page = uid in current_url and f"weibo.com/{uid}/" in current_url
-        if not already_on_page:
+        # 1. 访问微博详情页（可跳过）
+        if not skip_navigation:
             url = f"https://weibo.com/{uid}/{mid}"
             logger.info(f"访问微博详情页: {url}")
             self.browser.goto(url)
@@ -146,11 +146,12 @@ class WeiboCrawler:
         if post and post.get("content"):
             is_new = save_post(post)
             result["stats"]["post_saved"] = is_new
+            content_preview = post.get("content", "")[:30] + "..." if len(post.get("content", "")) > 30 else post.get("content", "")
             if is_new:
-                logger.info(f"微博已保存: {mid}")
+                logger.info(f"微博已保存: {mid} - {content_preview}")
                 update_crawl_progress(uid, mid, post.get("created_at", ""), is_newer=mark_pending)
             else:
-                logger.info(f"微博已存在: {mid}")
+                logger.info(f"微博已存在: {mid} - {content_preview}")
 
             # 4. 下载微博图片
             if post.get("images"):
@@ -170,74 +171,81 @@ class WeiboCrawler:
 
         print()
 
-        # 6. 滚动并点击「按热度」
-        if self._scroll_and_click_hot_button():
-            time.sleep(2)
+        # 6. 抓取评论（评论数为 0 时跳过）
+        comments_count = post.get("comments_count", 0) if post else 0
+        if comments_count > 0:
+            # 滚动并点击「按热度」
+            if self._scroll_and_click_hot_button():
+                time.sleep(2)
 
-        time.sleep(5)
+            time.sleep(5)
 
-        # 7. 抓取评论（两轮）
-        print()
-        all_comments = {}
-        comments, main_count = self.parser.parse_comments(mid, uid)
-        for c in comments:
-            if c.get("comment_id"):
-                all_comments[c["comment_id"]] = c
-        logger.info(f"第 1 轮抓取: 获取 {len(comments)} 条评论, 其中 {main_count} 个主评论")
-
-        # 8. 滚动后再抓一轮
-        if comments:
-            viewport_height = self.browser.page.evaluate("() => window.innerHeight")
-            scroll_distance = int(viewport_height * random.uniform(0.8, 1.0))
-            self.browser.scroll_page(scroll_distance)
-            time.sleep(random.uniform(2, 3))
-
+            # 抓取评论（两轮）
+            print()
+            all_comments = {}
             comments, main_count = self.parser.parse_comments(mid, uid)
-            new_count = 0
             for c in comments:
-                cid = c.get("comment_id")
-                if cid and cid not in all_comments:
-                    all_comments[cid] = c
-                    new_count += 1
-            logger.info(f"第 2 轮抓取: 新增 {new_count} 条，共获取 {len(comments)} 条评论，其中 {main_count} 个主评论")
+                if c.get("comment_id"):
+                    all_comments[c["comment_id"]] = c
+            logger.info(f"第 1 轮抓取: 获取 {len(comments)} 条评论, 其中 {main_count} 个主评论")
 
-        # 9. 保存评论
-        comments = list(all_comments.values())
-        result["comments"] = comments
-        print()
+            # 滚动后再抓一轮
+            if comments:
+                viewport_height = self.browser.page.evaluate("() => window.innerHeight")
+                scroll_distance = int(viewport_height * random.uniform(0.8, 1.0))
+                self.browser.scroll_page(scroll_distance)
+                time.sleep(random.uniform(2, 3))
 
-        for comment in comments:
-            # 下载评论图片
-            if comment.get("images"):
-                local_paths = self.image_downloader.download_comment_images(comment, uid)
-                if local_paths:
-                    comment["local_images"] = local_paths
-                    result["stats"]["comment_images_downloaded"] += len(local_paths)
+                comments, main_count = self.parser.parse_comments(mid, uid)
+                new_count = 0
+                new_main_count = 0
+                for c in comments:
+                    cid = c.get("comment_id")
+                    if cid and cid not in all_comments:
+                        all_comments[cid] = c
+                        new_count += 1
+                        if not c.get("reply_to_comment_id"):
+                            new_main_count += 1
+                logger.info(f"第 2 轮抓取: 新增 {new_count} 条评论，包含 {new_main_count} 条主评论")
 
             # 保存评论
-            if save_comment(comment):
-                result["stats"]["comments_saved"] += 1
-            else:
-                if update_comment_likes(comment["comment_id"], comment.get("likes_count", 0)):
-                    result["stats"]["comments_updated"] += 1
+            comments = list(all_comments.values())
+            result["comments"] = comments
 
-        # 输出评论保存统计
-        saved_count = result['stats']['comments_saved']
-        updated_count = result['stats']['comments_updated']
-        if saved_count > 0 and updated_count > 0:
-            logger.info(f"保存新增 {saved_count} 条评论，更新 {updated_count} 条点赞数")
-        elif saved_count > 0:
-            logger.info(f"保存 {saved_count} 条评论")
-        elif updated_count > 0:
-            logger.info(f"未新增评论，更新 {updated_count} 条点赞数")
+            for comment in comments:
+                # 下载评论图片
+                if comment.get("images"):
+                    local_paths = self.image_downloader.download_comment_images(comment, uid)
+                    if local_paths:
+                        comment["local_images"] = local_paths
+                        result["stats"]["comment_images_downloaded"] += len(local_paths)
 
-        # 10. 标记待更新（只看时间，不看评论数量）
+                # 保存评论
+                if save_comment(comment):
+                    result["stats"]["comments_saved"] += 1
+                else:
+                    if update_comment_likes(comment["comment_id"], comment.get("likes_count", 0)):
+                        result["stats"]["comments_updated"] += 1
+
+            # 输出评论保存统计
+            saved_count = result['stats']['comments_saved']
+            updated_count = result['stats']['comments_updated']
+            if saved_count > 0 and updated_count > 0:
+                logger.info(f"保存新增 {saved_count} 条评论，更新 {updated_count} 条点赞数")
+            elif saved_count > 0:
+                logger.info(f"保存 {saved_count} 条评论")
+            elif updated_count > 0:
+                logger.info(f"未新增评论，更新 {updated_count} 条点赞数")
+        else:
+            logger.info("评论数为 0，跳过评论抓取")
+
+        # 7. 标记待更新（只看时间，不看评论数量）
         if mark_pending:
             set_comment_pending(mid, True)
             result["stats"]["mark_pending"] = True
 
+        print()
         logger.info(f"微博 {mid} 抓取结束")
-        logger.info("-" * 50)
         return result
 
     def _parse_post_date(self, post: dict) -> datetime:
@@ -271,9 +279,10 @@ class WeiboCrawler:
             return
         save_blogger(blogger_info)
 
-        # 获取抓取边界
+        # 获取已抓取的最老微博（仅供参考）
         oldest_mid = get_blogger_oldest_mid(uid)
-        logger.info(f"已有记录 - 最老 mid: {oldest_mid}")
+        if oldest_mid:
+            logger.info(f"已有记录 - 最老 mid: {oldest_mid}")
 
         posts_to_process = []
 
@@ -323,13 +332,16 @@ class WeiboCrawler:
             # 历史模式：先处理待更新评论，再抓取稳定微博
             self._update_pending_comments(uid, stable_days)
 
-            # 抓取稳定微博（使用永久缓存，从断点续抓）
-            if oldest_mid:
-                logger.info(f"从断点继续: {oldest_mid}\n")
+            # 获取断点续抓的 since_id（API 分页游标）
+            next_since_id = get_next_since_id(uid)
+            if next_since_id:
+                logger.info(f"从断点继续 (since_id: {next_since_id})\n")
             else:
                 logger.info("首次抓取，从头开始\n")
 
-            posts, _, reached_cutoff = self.api.get_post_list(uid, since_id=oldest_mid, check_date=True)
+            posts, new_since_id, reached_cutoff = self.api.get_post_list(
+                uid, since_id=next_since_id, check_date=True
+            )
 
             for post in posts:
                 if is_post_exists(post["mid"]):
@@ -345,6 +357,10 @@ class WeiboCrawler:
             if posts_to_process:
                 logger.info(f"获取到 {len(posts_to_process)} 条稳定微博\n")
                 logger.info("-" * 50)
+
+            # 保存下一页的 since_id 用于断点续抓
+            if new_since_id:
+                update_next_since_id(uid, new_since_id)
 
             if reached_cutoff:
                 logger.info(f"博主 {uid} 的历史微博已全部抓取完成")

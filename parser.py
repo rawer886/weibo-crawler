@@ -90,14 +90,20 @@ class PageParser:
                 "is_repost": post_data.get("is_repost", False),
                 "repost_content": post_data.get("repost_content", ""),
                 "repost_images": post_data.get("repost_images", []),
+                "repost_video": post_data.get("repost_video"),
                 "images": post_data.get("images", []),
+                "video": post_data.get("video"),
                 "source_url": source_url or f"https://weibo.com/{uid}/{mid}",
             }
 
             log_msg = (f"解析成功: 内容长度={len(post['content'])}, 转发={post['reposts_count']}, "
                        f"评论={post['comments_count']}, 点赞={post['likes_count']}, 图片={len(post['images'])}张")
+            if post.get("video"):
+                log_msg += ", 视频=1个"
             if post["is_repost"]:
                 log_msg += f", 原微博图片={len(post['repost_images'])}张"
+                if post.get("repost_video"):
+                    log_msg += ", 原微博视频=1个"
             logger.info(log_msg)
             return post
 
@@ -196,11 +202,23 @@ class PageParser:
             except:
                 pass
 
-            # 评论内容
+            # 评论内容（包括表情）
             try:
                 content_span = elem.locator('.text > span').first
                 if content_span.count() > 0:
-                    comment["content"] = content_span.text_content().strip()
+                    # 先尝试获取纯文本
+                    text = content_span.text_content().strip()
+                    if text:
+                        comment["content"] = text
+                    else:
+                        # 纯表情评论：提取 img 的 alt 属性
+                        emojis = []
+                        for img in content_span.locator('img').all():
+                            alt = img.get_attribute('alt')
+                            if alt:
+                                emojis.append(alt)
+                        if emojis:
+                            comment["content"] = ''.join(emojis)
             except:
                 pass
 
@@ -348,119 +366,163 @@ class PageParser:
                     images: [],
                     is_repost: false,
                     repost_content: '',
-                    repost_images: []
+                    repost_images: [],
+                    video: null,
+                    repost_video: null
                 };
 
-                // 检测转发：必须有独立的转发区块
-                // 转发区块的特征是 class 包含独立的 "retweet" 单词或 "_retweet_m" 开头的类
-                // 注意：wbpro-feed-ogText 只是原创微博的内容区域，不代表是转发
+                // 辅助函数：检查元素是否在转发区块内
+                function isInRetweet(elem) {
+                    return elem.closest('.retweet, [class*="_retweet_m"]') !== null;
+                }
+
+                // 辅助函数：检查元素是否在视频区块内
+                function isInVideoBox(elem) {
+                    return elem.closest('[class*="_videoBox_"], [class*="videoBox"]') !== null;
+                }
+
+                // 辅助函数：转换缩略图为大图 URL
+                function toLargeUrl(src) {
+                    return src.replace(/\\/thumb\\d+\\//, '/large/')
+                              .replace(/\\/orj\\d+\\//, '/large/')
+                              .replace(/\\/mw\\d+\\//, '/large/');
+                }
+
+                // 辅助函数：检查是否为有效图片 URL
+                function isValidImageUrl(src) {
+                    return src && src.includes('sinaimg.cn') &&
+                           !src.includes('avatar') && !src.includes('emotion');
+                }
+
+                // 辅助函数：解析视频信息
+                function parseVideo(container) {
+                    if (!container) return null;
+
+                    const video = {};
+
+                    const videoElem = container.querySelector('video');
+                    if (videoElem) {
+                        let src = videoElem.src || videoElem.getAttribute('src');
+                        if (src) {
+                            video.url = src.startsWith('//') ? 'https:' + src : src;
+                        }
+                    }
+
+                    const posterImg = container.querySelector('.vjs-poster img');
+                    if (posterImg) {
+                        const coverSrc = posterImg.src || posterImg.getAttribute('src');
+                        if (coverSrc) {
+                            video.cover = toLargeUrl(coverSrc);
+                        }
+                    }
+
+                    const durElem = container.querySelector('[class*="_dur_"] span');
+                    if (durElem) {
+                        video.duration = durElem.textContent.trim();
+                    }
+
+                    return (video.url || video.cover) ? video : null;
+                }
+
+                // 辅助函数：收集图片 URL
+                function collectImages(container, targetArray, seenUrls = null) {
+                    container.querySelectorAll('img').forEach(img => {
+                        const src = img.src || img.getAttribute('data-src');
+                        if (!isValidImageUrl(src)) return;
+
+                        const largeSrc = toLargeUrl(src);
+                        if (seenUrls) {
+                            const imgId = largeSrc.replace(/https?:\\/\\/[^/]+/, '');
+                            if (seenUrls.has(imgId)) return;
+                            seenUrls.add(imgId);
+                        } else if (targetArray.includes(largeSrc)) {
+                            return;
+                        }
+                        targetArray.push(largeSrc);
+                    });
+                }
+
+                // 检测转发区块
                 const retweetArea = document.querySelector('.retweet, [class*="_retweet_m"]');
 
                 if (retweetArea) {
                     result.is_repost = true;
 
-                    // 原微博内容（在转发区块内的 wbtext）
+                    // 原微博内容
                     const reTextElem = retweetArea.querySelector('[class*="_wbtext_"], [class*="wbtext"]');
                     if (reTextElem) {
                         result.repost_content = reTextElem.textContent.trim();
                     }
 
-                    // 原微博图片（在转发区块内的图片）
-                    retweetArea.querySelectorAll('[class*="woo-picture-main"] img, .picture img').forEach(img => {
-                        const src = img.src || img.getAttribute('data-src');
-                        if (src && src.includes('sinaimg.cn') && !src.includes('avatar') && !src.includes('emotion')) {
-                            const largeSrc = src.replace(/\\/thumb\\d+\\//, '/large/').replace(/\\/orj\\d+\\//, '/large/').replace(/\\/mw\\d+\\//, '/large/');
-                            if (!result.repost_images.includes(largeSrc)) {
-                                result.repost_images.push(largeSrc);
-                            }
-                        }
+                    // 原微博图片
+                    retweetArea.querySelectorAll('[class*="woo-picture-main"], .picture').forEach(container => {
+                        collectImages(container, result.repost_images);
                     });
+
+                    // 原微博视频
+                    const repostVideoBox = retweetArea.querySelector('[class*="_videoBox_"], [class*="videoBox"]');
+                    result.repost_video = parseVideo(repostVideoBox);
                 }
 
-                // 正文内容（博主自己写的内容）
-                // 对于转发微博，内容在 wbpro-feed-ogText 区域（不在 retweet 区块内）
-                // 对于原创微博，内容也在 wbpro-feed-ogText 或 wbpro-feed-content 区域
-                const contentSelectors = ['.wbpro-feed-ogText [class*="_wbtext_"]', '[class*="detail_wbtext"]', '.wbpro-feed-content [class*="_wbtext_"]'];
+                // 博主正文内容（不在转发区块内）
+                const contentSelectors = [
+                    '.wbpro-feed-ogText [class*="_wbtext_"]',
+                    '[class*="detail_wbtext"]',
+                    '.wbpro-feed-content [class*="_wbtext_"]'
+                ];
                 for (const sel of contentSelectors) {
                     const elem = document.querySelector(sel);
-                    if (elem) {
-                        // 确保不是转发区块内的内容
-                        if (!elem.closest('.retweet') && !elem.closest('[class*="_retweet_m"]')) {
-                            result.content = elem.textContent.trim();
-                            if (result.content) break;
-                        }
+                    if (elem && !isInRetweet(elem)) {
+                        result.content = elem.textContent.trim();
+                        if (result.content) break;
                     }
                 }
 
-                // 发布时间（博主微博的时间，在 header 内或 _body_ 的第一个时间元素）
-                const headerTimeElem = document.querySelector('header [class*="_time_"], ._body_ > header [class*="_time_"]');
+                // 发布时间（不在转发区块内）
+                const headerTimeElem = document.querySelector('header [class*="_time_"]');
                 if (headerTimeElem) {
                     result.created_at = headerTimeElem.textContent.trim();
                 } else {
-                    // 备选：第一个时间元素（不在转发区块内）
-                    const timeElems = document.querySelectorAll('[class*="_time_"]');
-                    for (const elem of timeElems) {
-                        if (!elem.closest('.retweet') && !elem.closest('[class*="_retweet_m"]')) {
+                    for (const elem of document.querySelectorAll('[class*="_time_"]')) {
+                        if (!isInRetweet(elem)) {
                             result.created_at = elem.textContent.trim();
                             if (result.created_at) break;
                         }
                     }
                 }
 
-                // 互动数据（博主微博的数据，不是原微博的）
-                // 博主微博的 footer 应该在 _body_ 元素内但不在 retweet 区块内
-                // 查找策略：找到所有 footer，选择最后一个不在 retweet 内的（因为博主微博的 footer 在转发区块之后）
-                const allFooters = document.querySelectorAll('footer[aria-label]');
+                // 互动数据（最后一个不在转发区块内的 footer）
                 let targetFooter = null;
-
-                // 遍历所有 footer，找最后一个不在 retweet 区块内的
-                for (const footer of allFooters) {
-                    if (!footer.closest('.retweet') && !footer.closest('[class*="_retweet_m"]')) {
+                for (const footer of document.querySelectorAll('footer[aria-label]')) {
+                    if (!isInRetweet(footer)) {
                         targetFooter = footer;
-                        // 继续遍历，取最后一个符合条件的
                     }
                 }
-
-                // 如果没找到，尝试从 _body_ 元素的直接子 footer 获取
                 if (!targetFooter) {
-                    const bodyFooter = document.querySelector('[class*="_body_"] > footer[aria-label]');
-                    if (bodyFooter) {
-                        targetFooter = bodyFooter;
-                    }
+                    targetFooter = document.querySelector('[class*="_body_"] > footer[aria-label]');
                 }
-
                 if (targetFooter) {
-                    const label = targetFooter.getAttribute('aria-label');
-                    if (label) {
-                        const parts = label.split(',');
-                        if (parts.length >= 3) {
-                            result.reposts_count = parseInt(parts[0]) || 0;
-                            result.comments_count = parseInt(parts[1]) || 0;
-                            result.likes_count = parseInt(parts[2]) || 0;
-                        }
+                    const parts = (targetFooter.getAttribute('aria-label') || '').split(',');
+                    if (parts.length >= 3) {
+                        result.reposts_count = parseInt(parts[0]) || 0;
+                        result.comments_count = parseInt(parts[1]) || 0;
+                        result.likes_count = parseInt(parts[2]) || 0;
                     }
                 }
 
-                // 博主微博的图片（不在转发区块内的图片）
-                const picContainers = document.querySelectorAll('.picture, [class*="woo-picture-main"]');
+                // 博主微博的图片（不在转发区块和视频区块内）
                 const seenUrls = new Set();
-                picContainers.forEach(container => {
-                    // 跳过转发区块内的图片
-                    if (container.closest('.retweet') || container.closest('[class*="_retweet_m"]')) {
-                        return;
-                    }
-                    container.querySelectorAll('img').forEach(img => {
-                        const src = img.src || img.getAttribute('data-src');
-                        if (!src || !src.includes('sinaimg.cn')) return;
-                        if (src.includes('avatar') || src.includes('emotion')) return;
-                        const largeSrc = src.replace(/\\/thumb\\d+\\//, '/large/').replace(/\\/orj\\d+\\//, '/large/').replace(/\\/mw\\d+\\//, '/large/');
-                        const imgId = largeSrc.replace(/https?:\\/\\/[^/]+/, '');
-                        if (!seenUrls.has(imgId)) {
-                            seenUrls.add(imgId);
-                            result.images.push(largeSrc);
-                        }
-                    });
+                document.querySelectorAll('.picture, [class*="woo-picture-main"]').forEach(container => {
+                    if (isInRetweet(container) || isInVideoBox(container)) return;
+                    collectImages(container, result.images, seenUrls);
                 });
+
+                // 博主微博的视频（不在转发区块内）
+                for (const box of document.querySelectorAll('[class*="_videoBox_"], [class*="videoBox"]')) {
+                    if (isInRetweet(box)) continue;
+                    result.video = parseVideo(box);
+                    if (result.video) break;
+                }
 
                 return result;
             }

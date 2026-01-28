@@ -51,11 +51,8 @@ def init_database():
                 likes_count INTEGER DEFAULT 0,
                 is_repost INTEGER DEFAULT 0,
                 repost_content TEXT,
-                repost_images TEXT,
-                repost_local_images TEXT,
-                images TEXT,
-                local_images TEXT,
-                video_url TEXT,
+                repost_media TEXT,
+                media TEXT,
                 source_url TEXT,
                 comment_pending INTEGER DEFAULT 0,
                 crawled_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -92,6 +89,7 @@ def init_database():
                 oldest_mid TEXT,
                 newest_created_at TEXT,
                 oldest_created_at TEXT,
+                next_since_id TEXT,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -100,16 +98,6 @@ def init_database():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_comments_mid ON comments(mid)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_comments_likes ON comments(likes_count)")
-
-        # 迁移：添加 repost_images 和 repost_local_images 列（如果不存在）
-        cursor.execute("PRAGMA table_info(posts)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'repost_images' not in columns:
-            cursor.execute("ALTER TABLE posts ADD COLUMN repost_images TEXT")
-            logger.info("已添加 repost_images 列")
-        if 'repost_local_images' not in columns:
-            cursor.execute("ALTER TABLE posts ADD COLUMN repost_local_images TEXT")
-            logger.info("已添加 repost_local_images 列")
 
         conn.commit()
         logger.info("数据库初始化完成")
@@ -136,6 +124,21 @@ def save_blogger(blogger: dict):
         conn.commit()
 
 
+def _build_media(images: list, video: dict) -> Optional[dict]:
+    """构建媒体对象，返回 None 表示无媒体"""
+    media = {}
+    if images:
+        media["images"] = [{"url": url} for url in images]
+    if video:
+        media["video"] = video
+    return media or None
+
+
+def _serialize_media(media: Optional[dict]) -> Optional[str]:
+    """序列化媒体对象为 JSON 字符串"""
+    return json.dumps(media, ensure_ascii=False) if media else None
+
+
 def save_post(post: dict) -> bool:
     """保存微博，已存在则跳过。返回 True 表示新增"""
     with get_connection() as conn:
@@ -144,12 +147,14 @@ def save_post(post: dict) -> bool:
         if cursor.fetchone():
             return False
 
+        media = _build_media(post.get("images", []), post.get("video"))
+        repost_media = _build_media(post.get("repost_images", []), post.get("repost_video"))
+
         cursor.execute("""
             INSERT INTO posts (mid, uid, content, created_at, reposts_count,
                              comments_count, likes_count, is_repost,
-                             repost_content, repost_images,
-                             images, local_images, video_url, source_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             repost_content, repost_media, media, source_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             post["mid"],
             post["uid"],
@@ -160,10 +165,8 @@ def save_post(post: dict) -> bool:
             post.get("likes_count", 0),
             1 if post.get("is_repost") else 0,
             post.get("repost_content"),
-            json.dumps(post.get("repost_images", []), ensure_ascii=False),
-            json.dumps(post.get("images", []), ensure_ascii=False),
-            post.get("local_images"),
-            post.get("video_url"),
+            _serialize_media(repost_media),
+            _serialize_media(media),
             post.get("source_url"),
         ))
         conn.commit()
@@ -174,11 +177,15 @@ def update_post(post: dict) -> bool:
     """更新已存在的微博数据。返回 True 表示更新成功"""
     with get_connection() as conn:
         cursor = conn.cursor()
+
+        media = _build_media(post.get("images", []), post.get("video"))
+        repost_media = _build_media(post.get("repost_images", []), post.get("repost_video"))
+
         cursor.execute("""
             UPDATE posts SET
                 content = ?, created_at = ?, reposts_count = ?, comments_count = ?,
-                likes_count = ?, is_repost = ?, repost_content = ?, repost_images = ?,
-                images = ?, video_url = ?, source_url = ?
+                likes_count = ?, is_repost = ?, repost_content = ?, repost_media = ?,
+                media = ?, source_url = ?
             WHERE mid = ?
         """, (
             post.get("content"),
@@ -188,9 +195,8 @@ def update_post(post: dict) -> bool:
             post.get("likes_count", 0),
             1 if post.get("is_repost") else 0,
             post.get("repost_content"),
-            json.dumps(post.get("repost_images", []), ensure_ascii=False),
-            json.dumps(post.get("images", []), ensure_ascii=False),
-            post.get("video_url"),
+            _serialize_media(repost_media),
+            _serialize_media(media),
             post.get("source_url"),
             post["mid"],
         ))
@@ -371,6 +377,27 @@ def get_blogger_oldest_mid(uid: str) -> Optional[str]:
         return row[0] if row else None
 
 
+def get_next_since_id(uid: str) -> Optional[str]:
+    """获取断点续抓的 since_id（API 分页游标）"""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT next_since_id FROM crawl_progress WHERE uid = ?", (uid,)
+        ).fetchone()
+        return row[0] if row and row[0] else None
+
+
+def update_next_since_id(uid: str, since_id: str):
+    """更新断点续抓的 since_id"""
+    with get_connection() as conn:
+        now = datetime.now().isoformat()
+        conn.execute("""
+            INSERT INTO crawl_progress (uid, next_since_id, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(uid) DO UPDATE SET next_since_id = ?, updated_at = ?
+        """, (uid, since_id, now, since_id, now))
+        conn.commit()
+
+
 def get_blogger_newest_mid(uid: str) -> Optional[str]:
     """获取某博主已抓取的最新微博ID"""
     with get_connection() as conn:
@@ -380,24 +407,38 @@ def get_blogger_newest_mid(uid: str) -> Optional[str]:
         return row[0] if row else None
 
 
-def update_post_local_images(mid: str, local_images: list):
-    """更新微博的本地图片路径"""
+def _update_media_local_images(mid: str, local_images: list, column: str):
+    """更新媒体字段中图片的本地路径（内部函数）"""
     with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT {column} FROM posts WHERE mid = ?", (mid,))
+        row = cursor.fetchone()
+        if not row:
+            return
+
+        media = json.loads(row[0]) if row[0] else {}
+        images = media.get("images", [])
+
+        for i, local_path in enumerate(local_images):
+            if i < len(images):
+                images[i]["local"] = local_path
+
+        media["images"] = images
         conn.execute(
-            "UPDATE posts SET local_images = ? WHERE mid = ?",
-            (json.dumps(local_images, ensure_ascii=False), mid)
+            f"UPDATE posts SET {column} = ? WHERE mid = ?",
+            (_serialize_media(media), mid)
         )
         conn.commit()
+
+
+def update_post_local_images(mid: str, local_images: list):
+    """更新微博的本地图片路径"""
+    _update_media_local_images(mid, local_images, "media")
 
 
 def update_post_repost_local_images(mid: str, local_images: list):
     """更新原微博的本地图片路径"""
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE posts SET repost_local_images = ? WHERE mid = ?",
-            (json.dumps(local_images, ensure_ascii=False), mid)
-        )
-        conn.commit()
+    _update_media_local_images(mid, local_images, "repost_media")
 
 
 def set_comment_pending(mid: str, pending: bool = True):
