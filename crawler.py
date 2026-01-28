@@ -16,18 +16,16 @@ from datetime import datetime, timedelta
 from config import CRAWLER_CONFIG, LOG_CONFIG
 from database import (
     init_database, save_blogger, save_post, save_comment,
-    is_post_exists, get_blogger_oldest_mid, get_blogger_newest_mid,
-    update_crawl_progress, update_post_local_images, update_post_repost_local_images,
-    set_comment_pending, get_pending_comment_posts,
-    clear_comment_pending, delete_comments_by_mid,
-    update_comment_likes, get_next_since_id, update_next_since_id,
-    get_blogger
+    is_post_exists, update_post_local_images, update_post_repost_local_images,
+    update_comment_likes, get_blogger,
+    save_post_from_list, get_posts_pending_detail, mark_post_detail_done,
+    get_list_scan_oldest_mid, update_list_scan_oldest_mid
 )
 from browser import BrowserManager
 from api import WeiboAPI
 from parser import PageParser
 from image import ImageDownloader
-from display import display_post_with_comments
+from display import display_post_with_comments, Colors
 
 
 # 信号处理
@@ -40,8 +38,8 @@ def _signal_handler(signum, frame):
         print("\n强制退出...")
         os._exit(1)
     _stopping = True
-    print("\n\n收到停止信号，正在关闭... (再按一次强制退出)")
-    os._exit(0)
+    print("\n\n收到停止信号，正在关闭...")
+    raise SystemExit(0)
 
 
 signal.signal(signal.SIGINT, _signal_handler)
@@ -116,7 +114,6 @@ class WeiboCrawler:
                 "images_downloaded": 0,
                 "repost_images_downloaded": 0,
                 "comment_images_downloaded": 0,
-                "mark_pending": False
             }
         }
 
@@ -139,25 +136,10 @@ class WeiboCrawler:
         post = self.parser.parse_post(uid, mid, source_url=source_url)
         result["post"] = post
 
-        # 判断是否需要标记待更新
-        mark_pending = False
-        if post and post.get("created_at"):
-            try:
-                stable_days = CRAWLER_CONFIG.get("stable_days", 1)
-                stable_cutoff = datetime.now() - timedelta(days=stable_days)
-                post_date = datetime.strptime(post["created_at"], "%Y-%m-%d %H:%M")
-                if post_date > stable_cutoff:
-                    mark_pending = True
-                    logger.info(f"微博发布不足 {stable_days} 天，评论将标记为待更新")
-            except:
-                pass
-
         # 3. 保存微博
         if post and post.get("content"):
             is_new = save_post(post)
             result["stats"]["post_saved"] = is_new
-            if is_new:
-                update_crawl_progress(uid, mid, post.get("created_at", ""), is_newer=mark_pending)
 
             # 4. 下载微博图片
             if post.get("images"):
@@ -237,12 +219,7 @@ class WeiboCrawler:
         else:
             logger.info("评论数为 0，跳过评论抓取")
 
-        # 7. 标记待更新（只看时间，不看评论数量）
-        if mark_pending:
-            set_comment_pending(mid, True)
-            result["stats"]["mark_pending"] = True
-
-        # 8. 展示抓取结果（从数据库读取）
+        # 7. 展示抓取结果（从数据库读取）
         print()
         logger.info("抓取完成")
         print()
@@ -265,9 +242,8 @@ class WeiboCrawler:
         参数:
             uid: 博主ID
             mode:
-                - "history": 抓取稳定微博（超过 stable_days 的历史微博）
+                - "history": 两阶段抓取（扫描列表 + 抓取详情）
                 - "new": 抓取最新微博（stable_days 内，不使用缓存）
-                - "sync": 同步校验缺失微博（使用 24h 缓存）
         """
         stable_days = CRAWLER_CONFIG.get("stable_days", 1)
         stable_cutoff = datetime.now() - timedelta(days=stable_days)
@@ -280,31 +256,14 @@ class WeiboCrawler:
             logger.error(f"无法获取博主信息: {uid}")
             return
 
-        # 获取已抓取的最老微博（仅供参考）
-        oldest_mid = get_blogger_oldest_mid(uid)
-        if oldest_mid:
-            logger.info(f"已有记录 - 最老 mid: {oldest_mid}")
+        if mode == "history":
+            # 历史模式：两阶段抓取
+            # 阶段1：扫描列表，预存基本数据
+            self._scan_post_list(uid)
 
-        posts_to_process = []
-
-        if mode == "sync":
-            # 同步模式：24h 缓存，校验并补抓缺失微博
-            cache_max_age = 24 * 3600
-            logger.info(f"=== 同步模式：校验缺失微博 ===")
-
-            posts, _, _ = self.api.get_post_list(
-                uid, since_id=None, check_date=True, cache_max_age=cache_max_age
-            )
-
-            for post in posts:
-                if not is_post_exists(post["mid"]):
-                    logger.info(f"发现缺失微博: {post['mid']}")
-                    posts_to_process.append(post)
-
-            if posts_to_process:
-                logger.info(f"共发现 {len(posts_to_process)} 条缺失微博需要补抓")
-            else:
-                logger.info("没有缺失微博，数据完整")
+            # 阶段2：抓取待完善详情的微博（包括 detail_status=0 和 comment_pending=1）
+            self._crawl_pending_details(uid, stable_days)
+            return
 
         elif mode == "new":
             # 新微博模式：不使用缓存，抓取 stable_days 内的新微博
@@ -312,6 +271,7 @@ class WeiboCrawler:
 
             posts, _, _ = self.api.get_post_list(uid, since_id=None, cache_max_age=0)
 
+            posts_to_process = []
             for post in posts:
                 post_date = self._parse_post_date(post)
                 if post_date and post_date < stable_cutoff:
@@ -324,80 +284,80 @@ class WeiboCrawler:
 
                 posts_to_process.append(post)
 
-            if posts_to_process:
-                logger.info(f"发现 {len(posts_to_process)} 条新微博")
-            else:
+            if not posts_to_process:
                 logger.info("没有新微博")
+                return
 
-        elif mode == "history":
-            # 历史模式：先处理待更新评论，再抓取稳定微博
-            self._update_pending_comments(uid, stable_days)
+            logger.info(f"发现 {len(posts_to_process)} 条新微博")
 
-            # 获取断点续抓的 since_id（API 分页游标）
-            next_since_id = get_next_since_id(uid)
-            if next_since_id:
-                logger.info(f"从断点继续 (since_id: {next_since_id})\n")
-            else:
-                logger.info("首次抓取，从头开始\n")
+            for i, post in enumerate(posts_to_process):
+                mid = post["mid"]
+                logger.info(f"处理第 {i+1}/{len(posts_to_process)} 条微博: {mid}")
+                self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False)
+                mark_post_detail_done(mid)
+                self._random_delay()
 
-            posts, new_since_id, reached_cutoff = self.api.get_post_list(
-                uid, since_id=next_since_id, check_date=True
-            )
+            logger.info(f"博主 {uid} 抓取完成")
 
-            for post in posts:
-                if is_post_exists(post["mid"]):
-                    continue
+    def _scan_post_list(self, uid: str):
+        """阶段1：扫描微博列表，预存基本数据
 
-                post_date = self._parse_post_date(post)
-                if post_date and post_date > stable_cutoff:
-                    logger.debug(f"微博 {post['mid']} 发布不足 {stable_days} 天，跳过")
-                    continue
+        从上次扫描位置（list_scan_oldest_mid）开始，向更早方向拉取一批微博
+        """
+        print()
+        print(f"{Colors.BLUE}=== 阶段1：扫描微博列表 ==={Colors.RESET}")
 
-                posts_to_process.append(post)
+        # 获取上次扫描的最老微博 ID，作为本次拉取的起点
+        since_id = get_list_scan_oldest_mid(uid)
+        if since_id:
+            logger.info(f"从上次位置继续: {since_id}")
+        else:
+            logger.info("首次扫描，从最新微博开始")
 
-            if posts_to_process:
-                logger.info(f"获取到 {len(posts_to_process)} 条稳定微博\n")
-                logger.info("-" * 50)
+        # 拉取一批微博（内部会循环调 API 直到 >= max_posts_per_run）
+        posts, _, _ = self.api.get_post_list(uid, since_id=since_id, check_date=True)
 
-            # 保存下一页的 since_id 用于断点续抓
-            if new_since_id:
-                update_next_since_id(uid, new_since_id)
-
-            if reached_cutoff:
-                logger.info(f"博主 {uid} 的历史微博已全部抓取完成")
-
-        if not posts_to_process:
-            logger.info(f"博主 {uid} 没有需要处理的新微博")
+        if not posts:
+            logger.info("没有更多微博")
             return
 
-        # 处理每条微博
-        for i, post in enumerate(posts_to_process):
+        # 保存到数据库
+        saved_count = 0
+        oldest_mid = None
+        for post in posts:
+            oldest_mid = post["mid"]
+            if save_post_from_list(post):
+                saved_count += 1
+
+        # 更新扫描进度（记录本批次最老的 mid）
+        if oldest_mid:
+            update_list_scan_oldest_mid(uid, oldest_mid)
+
+        logger.info(f"列表扫描完成，获取 {len(posts)} 条，新增 {saved_count} 条")
+
+    def _crawl_pending_details(self, uid: str, stable_days: int):
+        """阶段2：抓取未抓详情的微博（detail_status=0 且超过 stable_days）"""
+        print()
+        print(f"{Colors.BLUE}=== 阶段2：抓取微博详情 ==={Colors.RESET}")
+
+        max_count = CRAWLER_CONFIG.get("max_posts_per_run", 50)
+        pending_posts = get_posts_pending_detail(uid, stable_days, limit=max_count)
+        if not pending_posts:
+            logger.info("没有需要抓取详情的微博")
+            return
+
+        logger.info(f"待抓取详情的微博: {len(pending_posts)} 条")
+        print()
+
+        for i, post in enumerate(pending_posts):
             mid = post["mid"]
-            logger.info(f"处理第 {i+1}/{len(posts_to_process)} 条微博: {mid}")
+            logger.info(f"[{i+1}/{len(pending_posts)}] 抓取: {mid}")
+
             self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False)
+            mark_post_detail_done(mid)
             self._random_delay()
 
         logger.info(f"博主 {uid} 抓取完成")
-
-    def _update_pending_comments(self, uid: str, stable_days: int):
-        """更新待更新评论的微博"""
-        pending_posts = get_pending_comment_posts(uid, stable_days)
-        if not pending_posts:
-            return
-
-        logger.info(f"=== 发现 {len(pending_posts)} 条微博需要更新评论 ===")
-        for post in pending_posts:
-            mid = post["mid"]
-            logger.info(f"更新微博 {mid} 的评论...")
-
-            old_count = delete_comments_by_mid(mid)
-            logger.info(f"清除旧评论 {old_count} 条")
-
-            result = self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False)
-            logger.info(f"保存了 {result['stats']['comments_saved']} 条新评论")
-
-            clear_comment_pending(mid)
-            self._random_delay()
 
     def _scroll_and_click_hot_button(self) -> bool:
         """滚动并点击「按热度」按钮"""

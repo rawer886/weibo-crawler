@@ -9,7 +9,7 @@ import logging
 import time
 
 from config import CRAWLER_CONFIG
-from database import init_database
+from database import init_database, mark_post_detail_done
 from crawler import WeiboCrawler
 from display import show_db_status
 
@@ -61,6 +61,7 @@ def crawl_single_post(url: str, uid: str, mid: str):
 
         print()
         crawler.crawl_single_post(uid, numeric_mid, source_url=url, skip_navigation=True)
+        mark_post_detail_done(numeric_mid)
         input("\n按回车键退出浏览器...")
 
     finally:
@@ -73,7 +74,6 @@ def crawl_user(uid: str, mode: str = "history"):
     mode_desc = {
         "new": "抓取最新微博（包括未稳定的，评论标记待更新）",
         "history": f"抓取稳定微博（发布超过 {stable_days} 天）",
-        "sync": "同步校验模式（补抓缺失微博，缓存有效期 24 小时）",
     }
 
     logger.info(f"批量抓取用户: {uid}")

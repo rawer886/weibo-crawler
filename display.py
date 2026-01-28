@@ -16,6 +16,7 @@ class Colors:
     RED = '\033[91m'
     CYAN = '\033[96m'
     YELLOW = '\033[93m'
+    BLUE = '\033[94m'
     DIM = '\033[2m'
     GRAY = '\033[90m'
     RESET = '\033[0m'
@@ -222,3 +223,52 @@ def show_recent_posts(limit: int = 10):
         print(f"  {content}")
         print(f"  转发:{post['reposts_count']} 评论:{post['comments_count']} 点赞:{post['likes_count']}")
         print()
+
+
+def show_blogger_status(uid: str):
+    """显示博主抓取进度和数据统计"""
+    from database import get_blogger_stats
+
+    init_database()
+    stats = get_blogger_stats(uid)
+
+    if not stats:
+        print(f"未找到博主: {uid}")
+        return
+
+    blogger = stats["blogger"]
+    posts = stats["posts"]
+    comments = stats["comments"]
+    progress = stats["progress"]
+
+    print()
+    print("=" * 60)
+    print(f"博主: {Colors.YELLOW}{blogger.get('nickname') or uid}{Colors.RESET}")
+    print(f"UID: {uid}")
+    print(f"粉丝数: {blogger.get('followers_count') or '未知'}")
+    print("=" * 60)
+
+    print()
+    print("--- 微博统计 ---")
+    total = posts.get("total", 0)
+    pending = posts.get("pending_detail", 0)
+    done = posts.get("detail_done", 0)
+    print(f"总数: {total} 条")
+    print(f"  已抓详情: {done} 条")
+    print(f"  待抓详情: {pending} 条")
+    if posts.get("oldest_post_time"):
+        print(f"时间范围: {posts['oldest_post_time']} ~ {posts['newest_post_time']}")
+
+    print()
+    print("--- 评论统计 ---")
+    print(f"总数: {comments.get('total', 0)} 条")
+    print(f"博主回复: {comments.get('blogger_replies', 0)} 条")
+
+    print()
+    print("--- 抓取进度 ---")
+    if progress:
+        print(f"列表扫描位置: {progress.get('list_scan_oldest_mid') or '未开始'}")
+        print(f"最后更新: {progress.get('updated_at') or '未知'}")
+    else:
+        print("尚未开始抓取")
+    print()
