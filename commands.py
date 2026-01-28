@@ -22,10 +22,12 @@ def crawl_single_post(url: str, uid: str, mid: str):
     logger.info(f"UID: {uid}, MID: {mid}")
     print()
 
+    init_database()
+
     crawler = WeiboCrawler()
     try:
         crawler.start(url)
-        logger.info("等待页面加载...")
+        logger.info("等待页面数据加载...")
         print()
         time.sleep(5)
 
@@ -48,7 +50,7 @@ def crawl_single_post(url: str, uid: str, mid: str):
                 return
 
         print()
-        result = crawler.crawl_single_post(uid, numeric_mid, source_url=url)
+        result = crawler.crawl_single_post(uid, numeric_mid, source_url=url, skip_navigation=True)
 
         # 输出统计
         print_crawl_stats(result["stats"], result.get("post"))
