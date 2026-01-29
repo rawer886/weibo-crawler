@@ -39,16 +39,21 @@ class BrowserManager:
         logger.info("启动浏览器...")
         self.playwright = sync_playwright().start()
 
-        # 获取屏幕尺寸
+        # 获取屏幕尺寸，根据配置的比例计算视口大小
         viewport_height = 900
         viewport_width = 720
+        width_ratio = CRAWLER_CONFIG.get("browser_width_ratio", 0.5)
+        height_ratio = CRAWLER_CONFIG.get("browser_height_ratio", 1.0)
         try:
             from screeninfo import get_monitors
             monitors = get_monitors()
             if monitors:
                 primary = monitors[0]
-                viewport_height = primary.height - 130
-                viewport_width = primary.width // 2
+                # 可用高度 = 屏幕高度 - 系统栏(约130px)
+                available_height = primary.height - 130
+                available_width = primary.width
+                viewport_height = int(available_height * height_ratio)
+                viewport_width = int(available_width * width_ratio)
                 logger.info(f"检测到显示器: {primary.width}x{primary.height}, 设置视口: {viewport_width}x{viewport_height}")
         except ImportError:
             logger.debug("screeninfo 未安装，使用默认视口大小")

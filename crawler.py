@@ -196,7 +196,7 @@ class WeiboCrawler:
                         new_count += 1
                         if not c.get("reply_to_comment_id"):
                             new_main_count += 1
-                logger.info(f"第 2 轮抓取: 新增 {new_count} 条评论，包含 {new_main_count} 条主评论")
+                logger.info(f"第 2 轮抓取: 获取 {len(comments)} 条评论，其中新增 {new_count} 条，包含 {new_main_count} 条主评论")
 
             # 保存评论
             comments = list(all_comments.values())
