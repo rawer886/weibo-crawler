@@ -100,5 +100,5 @@ def crawl_user(uid: str, mode: str = "history"):
         crawler.stop()
 
     print()
-    logger.info("抓取完成！")
+    logger.info("本次任务完成！")
     show_db_status()

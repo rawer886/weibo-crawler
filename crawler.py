@@ -14,6 +14,7 @@ from typing import Generator
 
 from config import CRAWLER_CONFIG
 from logger import setup_logging, get_logger
+from utils import random_delay
 from database import (
     save_blogger, save_post, update_post, save_comment,
     is_post_exists, update_post_local_images, update_post_repost_local_images,
@@ -120,7 +121,8 @@ class WeiboCrawler:
             url = f"https://weibo.com/{uid}/{mid}"
             logger.info(f"访问微博详情页: {url}")
             self.browser.goto(url)
-            time.sleep(5)
+            logger.info(f"等待微博内容加载...")
+            time.sleep(4)
 
         # 2. 保存博主信息（仅在数据库中不存在时调用API）
         if not skip_blogger_check:
@@ -166,10 +168,10 @@ class WeiboCrawler:
             print()
             # 滚动并点击「按热度」
             if self._scroll_and_click_hot_button():
-                time.sleep(2)
+                time.sleep(1)
 
             logger.info("等待评论加载...")
-            time.sleep(5)
+            time.sleep(4)
 
             # 抓取评论（两轮）
             all_comments = {}
@@ -283,7 +285,7 @@ class WeiboCrawler:
                 logger.info(f"已达到单次最大抓取数 {max_posts}，停止")
                 break
 
-            self._random_delay()
+            random_delay(CRAWLER_CONFIG["delay"], log_level="info")
 
         if posts_processed == 0:
             logger.info("没有新微博")
@@ -385,7 +387,7 @@ class WeiboCrawler:
                 mark_post_detail_done(mid)
 
             if processed < max_count:
-                self._random_delay()
+                random_delay(CRAWLER_CONFIG["delay"], log_level="info")
 
         logger.info(f"博主 {uid} 详情抓取完成")
 
@@ -439,10 +441,3 @@ class WeiboCrawler:
             parts.append(f"下载 {stats['comment_images_downloaded']} 张图片")
         if parts:
             logger.info(f"评论保存: {', '.join(parts)}")
-
-    def _random_delay(self, base_delay: float = None):
-        """随机延迟"""
-        base = base_delay or CRAWLER_CONFIG["delay"]
-        delay = random.uniform(base * 0.5, base * 1.5)
-        logger.debug(f"等待 {delay:.1f} 秒...")
-        time.sleep(delay)

@@ -8,14 +8,13 @@
 """
 import json
 import os
-import random
-import time
 from typing import Optional
 
 from playwright.sync_api import sync_playwright, Page, Browser
 
 from config import CRAWLER_CONFIG
 from logger import get_logger
+from utils import random_delay
 
 logger = get_logger(__name__)
 
@@ -131,7 +130,7 @@ class BrowserManager:
 
         # 验证登录状态
         self.page.goto("https://weibo.com")
-        self._random_delay(2.5)
+        random_delay(2.5)
 
         try:
             self.page.wait_for_load_state("networkidle", timeout=10000)
@@ -154,7 +153,7 @@ class BrowserManager:
             current_url = self.page.url
             if not current_url or "weibo.com" not in current_url:
                 self.page.goto("https://weibo.com")
-                self._random_delay(2.5)
+                random_delay(2.5)
 
             self.page.wait_for_load_state("networkidle", timeout=15000)
 
@@ -190,13 +189,6 @@ class BrowserManager:
             logger.warning(f"检查登录状态失败: {e}")
             return False
 
-    def _random_delay(self, base_delay: float = None):
-        """随机延迟"""
-        base = base_delay or CRAWLER_CONFIG["delay"]
-        delay = random.uniform(base * 0.5, base * 1.5)
-        logger.debug(f"等待 {delay:.1f} 秒...")
-        time.sleep(delay)
-
     def goto(self, url: str):
         """导航到指定 URL"""
         self.page.goto(url)
@@ -210,7 +202,7 @@ class BrowserManager:
                     block: 'center'
                 })
             """)
-            self._random_delay(0.75)
+            random_delay(1.5)
         except Exception as e:
             logger.debug(f"平滑滚动失败: {e}")
             element.scroll_into_view_if_needed()

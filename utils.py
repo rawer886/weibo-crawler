@@ -3,10 +3,17 @@
 
 职责：
 - 通用时间解析
+- 随机延迟
 - 其他共享工具函数
 """
+import random
 import re
+import time
 from datetime import datetime, timedelta
+
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def parse_weibo_time(time_str: str) -> str:
@@ -78,3 +85,19 @@ def parse_weibo_time(time_str: str) -> str:
         pass
 
     return time_str
+
+
+def random_delay(base_delay: float, log_level: str = "debug"):
+    """随机延迟（基准值的 50%~150%）
+
+    Args:
+        base_delay: 基准延迟秒数
+        log_level: 日志级别 ("debug" 或 "info")
+    """
+    delay = random.uniform(base_delay * 0.5, base_delay * 1.5)
+    if log_level == "info":
+        logger.info(f"等待 {delay:.1f} 秒...")
+        print()
+    else:
+        logger.debug(f"等待 {delay:.1f} 秒...")
+    time.sleep(delay)
