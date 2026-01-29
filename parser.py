@@ -4,15 +4,14 @@
 职责：
 - 详情页微博内容解析
 - 评论 DOM 解析
-- 时间格式转换
 """
 import hashlib
-import logging
-import re
-from datetime import datetime, timedelta
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from logger import get_logger
+from utils import parse_weibo_time
+
+logger = get_logger(__name__)
 
 
 class PageParser:
@@ -83,7 +82,7 @@ class PageParser:
                 "mid": str(mid),
                 "uid": uid,
                 "content": post_data.get("content", ""),
-                "created_at": self._parse_weibo_time(post_data.get("created_at", "")),
+                "created_at": parse_weibo_time(post_data.get("created_at", "")),
                 "reposts_count": post_data.get("reposts_count", 0),
                 "comments_count": post_data.get("comments_count", 0),
                 "likes_count": post_data.get("likes_count", 0),
@@ -244,7 +243,7 @@ class PageParser:
                         raw_time = parts[0]
                         if len(parts) > 1 and ':' in parts[1]:
                             raw_time += " " + parts[1]
-                        comment["created_at"] = self._parse_weibo_time(raw_time)
+                        comment["created_at"] = parse_weibo_time(raw_time)
             except:
                 pass
 
@@ -283,76 +282,6 @@ class PageParser:
                   .replace("/thumb150/", "/large/") \
                   .replace("/thumb180/", "/large/")
 
-    def _parse_weibo_time(self, time_str: str) -> str:
-        """解析微博时间字符串，统一输出为 YYYY-MM-DD HH:MM 格式"""
-        if not time_str:
-            return ""
-
-        now = datetime.now()
-        dt = None
-
-        try:
-            if "刚刚" in time_str:
-                dt = now
-
-            if not dt:
-                match = re.search(r'(\d+)\s*分钟前', time_str)
-                if match:
-                    dt = now - timedelta(minutes=int(match.group(1)))
-
-            if not dt:
-                match = re.search(r'(\d+)\s*小时前', time_str)
-                if match:
-                    dt = now - timedelta(hours=int(match.group(1)))
-
-            if not dt:
-                match = re.search(r'昨天\s*(\d{1,2}):(\d{2})', time_str)
-                if match:
-                    yesterday = now - timedelta(days=1)
-                    dt = yesterday.replace(
-                        hour=int(match.group(1)),
-                        minute=int(match.group(2)),
-                        second=0
-                    )
-
-            if not dt:
-                match = re.match(r'^(\d{1,2})-(\d{1,2})$', time_str.strip())
-                if match:
-                    dt = now.replace(
-                        month=int(match.group(1)),
-                        day=int(match.group(2)),
-                        hour=0, minute=0, second=0
-                    )
-
-            # YY-M-D HH:MM 或 YY-MM-DD HH:MM 格式（两位数年份），转换为四位数年份
-            if not dt:
-                match = re.match(r'^(\d{2})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$', time_str.strip())
-                if match:
-                    year, month, day, hour, minute = match.groups()
-                    full_year = 2000 + int(year)
-                    return f"{full_year}-{int(month):02d}-{int(day):02d} {int(hour):02d}:{minute}"
-
-            # YYYY-MM-DD HH:MM 格式（四位数年份），已是目标格式
-            if not dt:
-                match = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$', time_str.strip())
-                if match:
-                    year, month, day, hour, minute = match.groups()
-                    return f"{year}-{int(month):02d}-{int(day):02d} {int(hour):02d}:{minute}"
-
-            if not dt:
-                try:
-                    dt = datetime.strptime(time_str, "%a %b %d %H:%M:%S %z %Y")
-                    dt = dt.replace(tzinfo=None)
-                except:
-                    pass
-
-            if dt:
-                return dt.strftime("%Y-%m-%d %H:%M")
-
-            return time_str
-        except:
-            return time_str
-
     def _get_post_parse_script(self) -> str:
         """返回解析微博详情页的 JavaScript 代码"""
         return """
@@ -374,6 +303,27 @@ class PageParser:
                 // 辅助函数：检查元素是否在转发区块内
                 function isInRetweet(elem) {
                     return elem.closest('.retweet, [class*="_retweet_m"]') !== null;
+                }
+
+                // 辅助函数：提取文本内容（包括表情的 alt 属性）
+                function getTextWithEmoji(elem) {
+                    if (!elem) return '';
+                    let text = '';
+                    for (const node of elem.childNodes) {
+                        if (node.nodeType === Node.TEXT_NODE) {
+                            text += node.textContent;
+                        } else if (node.nodeType === Node.ELEMENT_NODE) {
+                            if (node.tagName === 'IMG' && node.alt) {
+                                text += node.alt;
+                            } else if (node.tagName === 'BR') {
+                                text += '\\n';
+                            } else {
+                                text += getTextWithEmoji(node);
+                            }
+                        }
+                        // 跳过注释节点 (nodeType === 8)
+                    }
+                    return text.trim();
                 }
 
                 // 辅助函数：检查元素是否在视频区块内
@@ -448,10 +398,10 @@ class PageParser:
                 if (retweetArea) {
                     result.is_repost = true;
 
-                    // 原微博内容
+                    // 原微博内容（支持纯表情）
                     const reTextElem = retweetArea.querySelector('[class*="_wbtext_"], [class*="wbtext"]');
                     if (reTextElem) {
-                        result.repost_content = reTextElem.textContent.trim();
+                        result.repost_content = getTextWithEmoji(reTextElem);
                     }
 
                     // 原微博图片
@@ -464,7 +414,7 @@ class PageParser:
                     result.repost_video = parseVideo(repostVideoBox);
                 }
 
-                // 博主正文内容（不在转发区块内）
+                // 博主正文内容（不在转发区块内，支持纯表情）
                 const contentSelectors = [
                     '.wbpro-feed-ogText [class*="_wbtext_"]',
                     '[class*="detail_wbtext"]',
@@ -473,7 +423,7 @@ class PageParser:
                 for (const sel of contentSelectors) {
                     const elem = document.querySelector(sel);
                     if (elem && !isInRetweet(elem)) {
-                        result.content = elem.textContent.trim();
+                        result.content = getTextWithEmoji(elem);
                         if (result.content) break;
                     }
                 }

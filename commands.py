@@ -5,15 +5,15 @@
 - 单条微博抓取命令
 - 用户批量抓取命令
 """
-import logging
 import time
 
 from config import CRAWLER_CONFIG
 from database import init_database
 from crawler import WeiboCrawler
 from display import show_db_status
+from logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _ensure_login(crawler: WeiboCrawler) -> bool:

@@ -7,7 +7,6 @@
 - 从浏览器缓存获取图片
 """
 import base64
-import logging
 import os
 from datetime import datetime
 from typing import Optional, List
@@ -15,8 +14,9 @@ from typing import Optional, List
 import requests
 
 from config import CRAWLER_CONFIG
+from logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ImageDownloader:
@@ -209,12 +209,9 @@ class ImageDownloader:
     def _get_extension(self, url: str) -> str:
         """从 URL 推断文件扩展名"""
         url_lower = url.lower()
-        if ".png" in url_lower:
-            return ".png"
-        elif ".gif" in url_lower:
-            return ".gif"
-        elif ".webp" in url_lower:
-            return ".webp"
+        for ext in (".png", ".gif", ".webp"):
+            if ext in url_lower:
+                return ext
         return ".jpg"
 
     def _parse_date(self, created_at: str, is_comment: bool = False) -> str:
