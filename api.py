@@ -10,8 +10,8 @@
 import hashlib
 import html
 import json
-import logging
 import os
+import random
 import re
 import time
 from datetime import datetime, timedelta
@@ -20,8 +20,10 @@ from typing import Optional, List, Tuple
 import requests
 
 from config import CRAWLER_CONFIG
+from logger import get_logger
+from utils import parse_weibo_time
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class APICache:
@@ -141,7 +143,13 @@ class WeiboAPI:
                 logger.info(f"命中缓存: {cache_key}")
                 return cached
 
-        headers = {"User-Agent": self.MOBILE_UA, "Referer": "https://m.weibo.cn/"}
+        headers = {
+            "User-Agent": self.MOBILE_UA,
+            "Referer": "https://m.weibo.cn/",
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        }
 
         try:
             resp = requests.get(url, headers=headers, cookies=self.cookies, timeout=10)
@@ -185,6 +193,9 @@ class WeiboAPI:
             url = f"https://m.weibo.cn/api/container/getIndex?containerid={container_id}"
             if current_since_id:
                 url += f"&since_id={current_since_id}"
+            # 添加时间戳和随机参数，模拟真实浏览器请求
+            url += f"&t={int(time.time() * 1000)}"
+            url += f"&_rnd={random.randint(1000000000, 9999999999)}"
 
             cache_key = f"posts_{uid}_{current_since_id or 'first'}"
 
@@ -247,7 +258,8 @@ class WeiboAPI:
                     break
 
                 page += 1
-                time.sleep(1)
+                # 随机延迟 2-4 秒，降低风控概率
+                time.sleep(random.uniform(2, 4))
 
             except Exception as e:
                 logger.error(f"获取微博列表失败: {e}")
@@ -264,7 +276,7 @@ class WeiboAPI:
             "mid": mid,
             "uid": uid,
             "content": self._clean_html(mblog.get("text", "")),
-            "created_at": self._parse_weibo_time(mblog.get("created_at", "")),
+            "created_at": parse_weibo_time(mblog.get("created_at", "")),
             "reposts_count": mblog.get("reposts_count", 0),
             "comments_count": mblog.get("comments_count", 0),
             "likes_count": mblog.get("attitudes_count", 0),
@@ -303,74 +315,3 @@ class WeiboAPI:
         text = html.unescape(text)
         text = re.sub(r'\s+', ' ', text)
         return text.strip()
-
-    def _parse_weibo_time(self, time_str: str) -> str:
-        """解析微博时间字符串，统一输出为 YYYY-MM-DD HH:MM 格式"""
-        if not time_str:
-            return ""
-
-        now = datetime.now()
-        dt = None
-
-        try:
-            if "刚刚" in time_str:
-                dt = now
-
-            if not dt:
-                match = re.search(r'(\d+)\s*分钟前', time_str)
-                if match:
-                    dt = now - timedelta(minutes=int(match.group(1)))
-
-            if not dt:
-                match = re.search(r'(\d+)\s*小时前', time_str)
-                if match:
-                    dt = now - timedelta(hours=int(match.group(1)))
-
-            if not dt:
-                match = re.search(r'昨天\s*(\d{1,2}):(\d{2})', time_str)
-                if match:
-                    yesterday = now - timedelta(days=1)
-                    dt = yesterday.replace(
-                        hour=int(match.group(1)),
-                        minute=int(match.group(2)),
-                        second=0
-                    )
-
-            if not dt:
-                match = re.match(r'^(\d{1,2})-(\d{1,2})$', time_str.strip())
-                if match:
-                    dt = now.replace(
-                        month=int(match.group(1)),
-                        day=int(match.group(2)),
-                        hour=0, minute=0, second=0
-                    )
-
-            # YY-MM-DD HH:MM 格式（两位数年份），转换为四位数年份
-            if not dt:
-                match = re.match(r'^(\d{2})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$', time_str.strip())
-                if match:
-                    year, month, day, hour, minute = match.groups()
-                    full_year = 2000 + int(year)
-                    return f"{full_year}-{int(month):02d}-{int(day):02d} {int(hour):02d}:{minute}"
-
-            # YYYY-MM-DD HH:MM 格式（四位数年份），已是目标格式
-            if not dt:
-                match = re.match(r'^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$', time_str.strip())
-                if match:
-                    year, month, day, hour, minute = match.groups()
-                    return f"{year}-{int(month):02d}-{int(day):02d} {int(hour):02d}:{minute}"
-
-            if not dt:
-                try:
-                    dt = datetime.strptime(time_str, "%a %b %d %H:%M:%S %z %Y")
-                    dt = dt.replace(tzinfo=None)
-                except:
-                    pass
-
-            if dt:
-                return dt.strftime("%Y-%m-%d %H:%M")
-
-            return time_str
-        except Exception as e:
-            logger.debug(f"解析时间失败: {time_str}, {e}")
-            return time_str

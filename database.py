@@ -2,15 +2,15 @@
 数据库操作模块
 """
 import json
-import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Optional
 
 from config import DATABASE_PATH
+from logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @contextmanager
@@ -222,6 +222,35 @@ def update_post(post: dict) -> bool:
         return cursor.rowcount > 0
 
 
+def _insert_comment(cursor, comment: dict):
+    """插入评论记录（内部函数）"""
+    images = comment.get("images")
+    local_images = comment.get("local_images")
+
+    cursor.execute("""
+        INSERT INTO comments (comment_id, mid, uid, nickname, content,
+                            created_at, likes_count, is_blogger_reply,
+                            reply_to_comment_id, reply_to_uid, reply_to_nickname,
+                            reply_to_content, images, local_images)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        comment["comment_id"],
+        comment["mid"],
+        comment.get("uid"),
+        comment.get("nickname"),
+        comment.get("content"),
+        comment.get("created_at"),
+        comment.get("likes_count", 0),
+        1 if comment.get("is_blogger_reply") else 0,
+        comment.get("reply_to_comment_id"),
+        comment.get("reply_to_uid"),
+        comment.get("reply_to_nickname"),
+        comment.get("reply_to_content"),
+        json.dumps(images, ensure_ascii=False) if images else None,
+        json.dumps(local_images, ensure_ascii=False) if local_images else None,
+    ))
+
+
 def save_comment(comment: dict) -> bool:
     """保存评论，已存在则跳过。返回 True 表示新增"""
     with get_connection() as conn:
@@ -230,31 +259,7 @@ def save_comment(comment: dict) -> bool:
         if cursor.fetchone():
             return False
 
-        images = comment.get("images")
-        local_images = comment.get("local_images")
-
-        cursor.execute("""
-            INSERT INTO comments (comment_id, mid, uid, nickname, content,
-                                created_at, likes_count, is_blogger_reply,
-                                reply_to_comment_id, reply_to_uid, reply_to_nickname,
-                                reply_to_content, images, local_images)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            comment["comment_id"],
-            comment["mid"],
-            comment.get("uid"),
-            comment.get("nickname"),
-            comment.get("content"),
-            comment.get("created_at"),
-            comment.get("likes_count", 0),
-            1 if comment.get("is_blogger_reply") else 0,
-            comment.get("reply_to_comment_id"),
-            comment.get("reply_to_uid"),
-            comment.get("reply_to_nickname"),
-            comment.get("reply_to_content"),
-            json.dumps(images, ensure_ascii=False) if images else None,
-            json.dumps(local_images, ensure_ascii=False) if local_images else None,
-        ))
+        _insert_comment(cursor, comment)
         conn.commit()
         return True
 
@@ -273,31 +278,7 @@ def save_comments_batch(comments: list[dict]) -> int:
             if cursor.fetchone():
                 continue
 
-            images = comment.get("images")
-            local_images = comment.get("local_images")
-
-            cursor.execute("""
-                INSERT INTO comments (comment_id, mid, uid, nickname, content,
-                                    created_at, likes_count, is_blogger_reply,
-                                    reply_to_comment_id, reply_to_uid, reply_to_nickname,
-                                    reply_to_content, images, local_images)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                comment["comment_id"],
-                comment["mid"],
-                comment.get("uid"),
-                comment.get("nickname"),
-                comment.get("content"),
-                comment.get("created_at"),
-                comment.get("likes_count", 0),
-                1 if comment.get("is_blogger_reply") else 0,
-                comment.get("reply_to_comment_id"),
-                comment.get("reply_to_uid"),
-                comment.get("reply_to_nickname"),
-                comment.get("reply_to_content"),
-                json.dumps(images, ensure_ascii=False) if images else None,
-                json.dumps(local_images, ensure_ascii=False) if local_images else None,
-            ))
+            _insert_comment(cursor, comment)
             new_count += 1
 
         conn.commit()

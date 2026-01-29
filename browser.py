@@ -7,7 +7,6 @@
 - 登录状态检查
 """
 import json
-import logging
 import os
 import random
 import time
@@ -16,8 +15,9 @@ from typing import Optional
 from playwright.sync_api import sync_playwright, Page, Browser
 
 from config import CRAWLER_CONFIG
+from logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class BrowserManager:

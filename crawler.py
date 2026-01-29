@@ -6,7 +6,6 @@
 - 单条微博抓取流程
 - 博主批量抓取流程
 """
-import logging
 import os
 import random
 import signal
@@ -14,9 +13,10 @@ import time
 import threading
 from datetime import datetime, timedelta
 
-from config import CRAWLER_CONFIG, LOG_CONFIG
+from config import CRAWLER_CONFIG
+from logger import setup_logging, get_logger
 from database import (
-    init_database, save_blogger, save_post, save_comment,
+    init_database, save_blogger, save_post, update_post, save_comment,
     is_post_exists, update_post_local_images, update_post_repost_local_images,
     update_comment_likes, get_blogger,
     save_post_from_list, get_posts_pending_detail, mark_post_detail_done,
@@ -28,6 +28,9 @@ from parser import PageParser
 from image import ImageDownloader
 from display import display_post_with_comments, Colors
 
+# 初始化日志
+setup_logging()
+logger = get_logger(__name__)
 
 # 信号处理
 _stopping = False
@@ -45,17 +48,6 @@ def _signal_handler(signum, frame):
 
 signal.signal(signal.SIGINT, _signal_handler)
 signal.signal(signal.SIGTERM, _signal_handler)
-
-# 配置日志
-logging.basicConfig(
-    level=getattr(logging, LOG_CONFIG["level"]),
-    format=LOG_CONFIG["format"],
-    handlers=[
-        logging.FileHandler(LOG_CONFIG["file"], encoding="utf-8"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
 
 
 class WeiboCrawler:
@@ -143,10 +135,16 @@ class WeiboCrawler:
         post = self.parser.parse_post(uid, mid, source_url=source_url)
         result["post"] = post
 
-        # 3. 保存微博（有文本或有图片/视频即可保存）
-        has_content = post and (post.get("content") or post.get("images") or post.get("video"))
+        # 3. 保存微博（有文本、图片、视频，或转发的原微博有内容即可保存）
+        has_content = post and (
+            post.get("content") or post.get("images") or post.get("video") or
+            post.get("repost_content") or post.get("repost_images") or post.get("repost_video")
+        )
         if has_content:
             is_new = save_post(post, stable_days=stable_days)
+            if not is_new:
+                # 已存在则更新内容
+                update_post(post)
             result["stats"]["post_saved"] = is_new
             result["success"] = True  # 成功保存或已存在
 
