@@ -22,7 +22,7 @@ DATABASE_PATH = os.path.join(DATA_DIR, "weibo.db")
 # 爬虫配置
 CRAWLER_CONFIG = {
     # 抓取间隔（秒）- 每条微博之间的等待时间，实际会在此基础上随机浮动
-    "delay": 15, # 建议值: 10-30秒，太快容易被风控
+    "delay": 30, # 建议值: 10-30秒，太快容易被风控
 
     # 每次运行最多抓取的微博数量（断续抓取，每次少量）
     "max_posts_per_run": 100,

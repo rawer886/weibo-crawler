@@ -83,7 +83,8 @@ class APICache:
 class WeiboAPI:
     """微博 API 客户端"""
 
-    MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15"
+    # iPhone 15 Pro Max, iOS 17.4, Safari
+    MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
 
     def __init__(self, cookies: dict = None):
         self.cookies = cookies or {}
@@ -146,14 +147,28 @@ class WeiboAPI:
         headers = {
             "User-Agent": self.MOBILE_UA,
             "Referer": "https://m.weibo.cn/",
-            "X-Requested-With": "XMLHttpRequest",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
 
         try:
             resp = requests.get(url, headers=headers, cookies=self.cookies, timeout=10)
             data = resp.json()
+
+            # 检测验证码拦截 (ok: -100)
+            if data.get("ok") == -100:
+                captcha_url = data.get("url", "")
+                logger.warning(f"触发验证码拦截！请在浏览器中完成验证:")
+                logger.warning(f"验证码链接: {captcha_url}")
+                print("\n" + "=" * 60)
+                print("请在浏览器中打开上方链接，完成验证码后按回车键继续...")
+                print("=" * 60)
+                input()
+                # 重试请求
+                resp = requests.get(url, headers=headers, cookies=self.cookies, timeout=10)
+                data = resp.json()
+
+            # 打印 API 响应状态
+            if data.get("ok") != 1:
+                logger.warning(f"API 返回异常 [{cache_key}]: {data}")
 
             if data.get("ok") == 1:
                 self.cache.set(cache_key, data)
@@ -161,6 +176,7 @@ class WeiboAPI:
             return data
         except Exception as e:
             logger.error(f"API 请求失败: {e}")
+            logger.error(f"响应内容: {resp.text[:500] if resp else 'None'}")
             return None
 
     def get_post_list(self, uid: str, since_id: str = None, max_count: int = None,
@@ -193,9 +209,6 @@ class WeiboAPI:
             url = f"https://m.weibo.cn/api/container/getIndex?containerid={container_id}"
             if current_since_id:
                 url += f"&since_id={current_since_id}"
-            # 添加时间戳和随机参数，模拟真实浏览器请求
-            url += f"&t={int(time.time() * 1000)}"
-            url += f"&_rnd={random.randint(1000000000, 9999999999)}"
 
             cache_key = f"posts_{uid}_{current_since_id or 'first'}"
 
