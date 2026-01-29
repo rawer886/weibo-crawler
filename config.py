@@ -35,6 +35,8 @@ CRAWLER_CONFIG = {
 
     # 浏览器配置
     "headless": False,  # False 可以看到浏览器操作，方便调试
+    "browser_width_ratio": 0.8,   # 浏览器宽度占屏幕可用宽度的比例 (0-1)
+    "browser_height_ratio": 1.0,  # 浏览器高度占屏幕可用高度的比例 (0-1)
 
     # Cookie 文件路径
     "cookie_file": os.path.join(DATA_DIR, "cookies.json"),
