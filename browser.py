@@ -38,6 +38,12 @@ class BrowserManager:
         logger.info("启动浏览器...")
         self.playwright = sync_playwright().start()
 
+        # 检查 cookie 文件，如果不存在则强制使用有头模式以便登录
+        headless = CRAWLER_CONFIG["headless"]
+        if headless and not os.path.exists(COOKIE_FILE):
+            headless = False
+            logger.info("未找到 Cookie 文件，切换到有头模式以便登录")
+
         # 获取屏幕尺寸，根据配置的比例计算视口大小
         viewport_height = 900
         viewport_width = 720
@@ -53,7 +59,7 @@ class BrowserManager:
                 available_width = primary.width
                 viewport_height = int(available_height * height_ratio)
                 viewport_width = int(available_width * width_ratio)
-                if not CRAWLER_CONFIG["headless"]:
+                if not headless:
                     logger.info(f"检测到显示器: {primary.width}x{primary.height}, 设置视口: {viewport_width}x{viewport_height}")
         except ImportError:
             logger.debug("screeninfo 未安装，使用默认视口大小")
@@ -62,7 +68,7 @@ class BrowserManager:
 
         # 启动浏览器
         self.browser = self.playwright.chromium.launch(
-            headless=CRAWLER_CONFIG["headless"],
+            headless=headless,
             args=[
                 f"--window-size={viewport_width},{viewport_height + 28}",
                 "--window-position=0,25",
