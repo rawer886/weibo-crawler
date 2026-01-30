@@ -12,7 +12,7 @@ from typing import Optional
 
 from playwright.sync_api import sync_playwright, Page, Browser
 
-from config import CRAWLER_CONFIG
+from config import CRAWLER_CONFIG, COOKIE_FILE
 from logger import get_logger
 from utils import random_delay
 
@@ -91,7 +91,7 @@ class BrowserManager:
     def _save_cookies(self):
         """保存 cookies 到文件"""
         cookies = self.page.context.cookies()
-        with open(CRAWLER_CONFIG["cookie_file"], "w") as f:
+        with open(COOKIE_FILE, "w") as f:
             json.dump(cookies, f)
         self._update_request_cookies(cookies)
         logger.info("Cookies 已更新\n")
@@ -99,7 +99,7 @@ class BrowserManager:
     def _load_cookies(self):
         """从文件加载 cookies"""
         try:
-            with open(CRAWLER_CONFIG["cookie_file"], "r") as f:
+            with open(COOKIE_FILE, "r") as f:
                 cookies = json.load(f)
             self.page.context.add_cookies(cookies)
             self._update_request_cookies(cookies)

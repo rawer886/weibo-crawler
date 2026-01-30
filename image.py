@@ -13,7 +13,7 @@ from typing import Optional, List
 
 import requests
 
-from config import CRAWLER_CONFIG
+from config import CRAWLER_CONFIG, IMAGES_DIR
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -84,7 +84,7 @@ class ImageDownloader:
         if not images:
             return []
 
-        images_base_dir = CRAWLER_CONFIG.get("images_dir", "images")
+        images_base_dir = IMAGES_DIR
         # 相对路径: {uid}/{date_str}
         relative_dir = os.path.join(uid, date_str)
         save_dir = os.path.join(images_base_dir, relative_dir)

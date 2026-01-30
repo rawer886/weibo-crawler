@@ -19,7 +19,7 @@ from typing import Optional, List, Tuple
 
 import requests
 
-from config import CRAWLER_CONFIG
+from config import CRAWLER_CONFIG, CACHE_DIR
 from logger import get_logger
 from utils import parse_weibo_time
 
@@ -88,7 +88,7 @@ class WeiboAPI:
 
     def __init__(self, cookies: dict = None):
         self.cookies = cookies or {}
-        self.cache = APICache(CRAWLER_CONFIG.get("cache_dir", "cache"))
+        self.cache = APICache(CACHE_DIR)
 
     def set_cookies(self, cookies: dict):
         """更新 cookies"""

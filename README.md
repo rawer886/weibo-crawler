@@ -42,7 +42,7 @@ CRAWLER_CONFIG = {
     "delay": 15,              # 请求间隔（秒），实际会随机浮动
     "max_posts_per_run": 50,  # 每次最多抓取微博数
     "max_days": 180,          # 抓取时间范围（天）
-    "stable_days": 1,         # 微博发布几天后视为稳定
+    "stable_weibo_days": 1,   # 微博发布几天后视为稳定
     "headless": False,        # 是否无头模式
     "download_images": True,  # 是否下载图片
 }

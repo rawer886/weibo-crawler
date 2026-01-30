@@ -161,11 +161,11 @@ def _insert_post(cursor, post: dict, detail_status: int = 1):
     ))
 
 
-def save_post(post: dict, stable_days: int = None) -> bool:
+def save_post(post: dict, stable_weibo_days: int = None) -> bool:
     """保存微博，已存在则跳过。返回 True 表示新增
 
     参数:
-        stable_days: 如果提供，则发布时间在 stable_days 内的微博 detail_status 设为 0
+        stable_weibo_days: 如果提供，则发布时间在 stable_weibo_days 内的微博 detail_status 设为 0
     """
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -175,12 +175,12 @@ def save_post(post: dict, stable_days: int = None) -> bool:
 
         # 根据时间判断 detail_status
         detail_status = 1
-        if stable_days is not None:
+        if stable_weibo_days is not None:
             created_at = post.get("created_at")
             if created_at:
                 try:
                     post_date = datetime.strptime(created_at, "%Y-%m-%d %H:%M")
-                    cutoff = datetime.now() - timedelta(days=stable_days)
+                    cutoff = datetime.now() - timedelta(days=stable_weibo_days)
                     if post_date >= cutoff:
                         detail_status = 0
                 except Exception:
@@ -471,13 +471,13 @@ def save_post_from_list(post: dict) -> bool:
         return True
 
 
-def get_posts_pending_detail(uid: str, stable_days: int, limit: int = 50) -> list:
+def get_posts_pending_detail(uid: str, stable_weibo_days: int, limit: int = 50) -> list:
     """获取需要抓取详情的微博
 
-    条件：detail_status=0（未抓详情）且超过 stable_days
+    条件：detail_status=0（未抓详情）且超过 stable_weibo_days
     按 created_at DESC 排序
     """
-    cutoff_date = (datetime.now() - timedelta(days=stable_days)).strftime("%Y-%m-%d %H:%M")
+    cutoff_date = (datetime.now() - timedelta(days=stable_weibo_days)).strftime("%Y-%m-%d %H:%M")
     with get_connection() as conn:
         cursor = conn.execute("""
             SELECT mid, uid, content, created_at, comments_count, detail_status

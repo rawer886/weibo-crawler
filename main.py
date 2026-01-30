@@ -50,11 +50,14 @@ def main():
   python main.py https://weibo.com/1497035431/AbCdEfGhI       # 抓取单条微博
   python main.py https://weibo.com/u/1497035431              # 批量抓取用户微博
   python main.py https://weibo.com/u/1497035431 --mode new   # 抓取用户最新微博
+  python main.py https://weibo.com/u/1497035431 --mode new --start-days 1  # 从昨天开始抓取
         """
     )
     parser.add_argument("url", help="微博 URL（用户主页或单条微博）")
     parser.add_argument("--mode", choices=["new", "history"], default="history",
                         help="抓取模式: history(稳定微博), new(最新微博)")
+    parser.add_argument("--start-days", type=int, default=0, metavar="N",
+                        help="从 N 天前开始抓取（仅 new 模式有效，0 表示当前时间）")
 
     args = parser.parse_args()
 
@@ -64,7 +67,7 @@ def main():
     if parsed["type"] == "post":
         crawl_single_post(args.url, parsed["uid"], parsed["mid"])
     elif parsed["type"] == "user":
-        crawl_user(parsed["uid"], mode=args.mode)
+        crawl_user(parsed["uid"], mode=args.mode, start_days=args.start_days)
     else:
         print(f"无法解析 URL: {args.url}")
         print("\n支持的格式:")

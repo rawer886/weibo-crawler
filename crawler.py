@@ -10,6 +10,7 @@ import os
 import random
 import signal
 import time
+from datetime import datetime, timedelta
 from typing import Generator
 
 from config import CRAWLER_CONFIG
@@ -89,14 +90,14 @@ class WeiboCrawler:
 
     def crawl_single_post(self, uid: str, mid: str, source_url: str = None,
                          skip_navigation: bool = False, skip_blogger_check: bool = False,
-                         show_comments: bool = True, stable_days: int = None) -> dict:
+                         show_comments: bool = True, stable_weibo_days: int = None) -> dict:
         """抓取单条微博
 
         参数:
             skip_navigation: 跳过页面导航（当页面已在目标位置时使用）
             skip_blogger_check: 跳过博主信息检查（批量抓取时已在入口处处理）
             show_comments: 展示评论（批量抓取时设为 False）
-            stable_days: 如果提供，则发布时间在 stable_days 内的微博 detail_status 设为 0
+            stable_weibo_days: 如果提供，则发布时间在 stable_weibo_days 内的微博 detail_status 设为 0
         """
         result = {
             "post": None,
@@ -138,7 +139,7 @@ class WeiboCrawler:
             post.get("repost_content") or post.get("repost_images") or post.get("repost_video")
         )
         if has_content:
-            is_new = save_post(post, stable_days=stable_days)
+            is_new = save_post(post, stable_weibo_days=stable_weibo_days)
             if not is_new:
                 # 已存在则更新内容
                 update_post(post)
@@ -231,16 +232,17 @@ class WeiboCrawler:
         display_post_with_comments(mid, show_comments=show_comments)
         return result
 
-    def crawl_blogger(self, uid: str, mode: str = "history"):
+    def crawl_blogger(self, uid: str, mode: str = "history", start_days: int = 0):
         """抓取博主微博
 
         参数:
             uid: 博主ID
             mode:
                 - "history": 两阶段抓取（扫描列表 + 抓取详情）
-                - "new": 抓取最新微博（stable_days 内，不使用缓存）
+                - "new": 抓取最新微博（stable_weibo_days 内，不使用缓存）
+            start_days: 从 N 天前开始抓取（仅 new 模式有效，0 表示当前时间）
         """
-        stable_days = CRAWLER_CONFIG.get("stable_days", 1)
+        stable_weibo_days = CRAWLER_CONFIG.get("stable_weibo_days", 1)
         logger.info(f"开始抓取博主: {uid}, 模式: {mode}")
 
         # 确保博主信息已入库
@@ -251,11 +253,17 @@ class WeiboCrawler:
 
         if mode == "history":
             # 历史模式：按需拉取列表 + 抓取详情
-            self._crawl_pending_details(uid, stable_days)
+            self._crawl_pending_details(uid, stable_weibo_days)
             return
 
         # 新微博模式：不使用缓存，抓取到与历史数据衔接为止
         logger.info("=== 抓取最新微博 ===")
+
+        # 计算截止时间（跳过最近 N*24 小时的微博）
+        cutoff_time = None
+        if start_days > 0:
+            cutoff_time = datetime.now() - timedelta(days=start_days)
+            logger.info(f"从 {cutoff_time.strftime('%Y-%m-%d %H:%M')} 开始抓取，跳过之后的微博")
 
         consecutive_exists = 0
         max_consecutive = 5
@@ -264,6 +272,16 @@ class WeiboCrawler:
 
         for post in self._iter_post_list(uid, cache_max_age=0):
             mid = post["mid"]
+
+            # 跳过截止时间之后的微博（太新的）
+            if cutoff_time and post.get("created_at"):
+                try:
+                    post_time = datetime.strptime(post["created_at"], "%Y-%m-%d %H:%M")
+                    if post_time > cutoff_time:
+                        logger.debug(f"跳过太新的微博 {mid} ({post['created_at']})")
+                        continue
+                except:
+                    pass
 
             if is_post_exists(mid):
                 consecutive_exists += 1
@@ -279,7 +297,7 @@ class WeiboCrawler:
 
             logger.info(f"处理第 {posts_processed} 条新微博: {mid}")
             self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False,
-                                   stable_days=stable_days)
+                                   stable_weibo_days=stable_weibo_days)
 
             if posts_processed >= max_posts:
                 logger.info(f"已达到单次最大抓取数 {max_posts}，停止")
@@ -352,8 +370,8 @@ class WeiboCrawler:
 
         return saved_count
 
-    def _crawl_pending_details(self, uid: str, stable_days: int):
-        """抓取未抓详情的微博（detail_status=0 且超过 stable_days）
+    def _crawl_pending_details(self, uid: str, stable_weibo_days: int):
+        """抓取未抓详情的微博（detail_status=0 且超过 stable_weibo_days）
 
         按需拉取列表：当待抓队列不足时，拉取更多
         """
@@ -365,14 +383,14 @@ class WeiboCrawler:
 
         for processed in range(1, max_count + 1):
             # 获取待抓取的微博
-            pending = get_posts_pending_detail(uid, stable_days, limit=min_queue_size + 5)
+            pending = get_posts_pending_detail(uid, stable_weibo_days, limit=min_queue_size + 5)
 
             # 队列为空或不足时，尝试补充
             if len(pending) < min_queue_size:
                 new_count = self._scan_post_list_batch(uid)
                 if new_count > 0:
                     logger.info(f"补充列表，新增 {new_count} 条")
-                    pending = get_posts_pending_detail(uid, stable_days, limit=min_queue_size + 5)
+                    pending = get_posts_pending_detail(uid, stable_weibo_days, limit=min_queue_size + 5)
 
             if not pending:
                 logger.info("没有更多微博可抓取")
