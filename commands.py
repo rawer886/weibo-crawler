@@ -60,25 +60,34 @@ def crawl_single_post(url: str, uid: str, mid: str):
             return
 
         print()
-        stable_days = CRAWLER_CONFIG.get("stable_days", 1)
+        stable_weibo_days = CRAWLER_CONFIG.get("stable_weibo_days", 1)
         crawler.crawl_single_post(uid, numeric_mid, source_url=url, skip_navigation=True,
-                                  stable_days=stable_days)
+                                  stable_weibo_days=stable_weibo_days)
         input("\n按回车键退出浏览器...")
 
     finally:
         crawler.stop()
 
 
-def crawl_user(uid: str, mode: str = "history"):
-    """批量抓取用户微博"""
-    stable_days = CRAWLER_CONFIG.get("stable_days", 1)
+def crawl_user(uid: str, mode: str = "history", start_days: int = 0):
+    """批量抓取用户微博
+
+    参数:
+        uid: 用户 ID
+        mode: 抓取模式 (history/new)
+        start_days: 从 N 天前开始抓取（仅 new 模式有效）
+    """
+    stable_weibo_days = CRAWLER_CONFIG.get("stable_weibo_days", 1)
     mode_desc = {
         "new": "抓取最新微博（包括未稳定的，评论标记待更新）",
-        "history": f"抓取稳定微博（发布超过 {stable_days} 天）",
+        "history": f"抓取稳定微博（发布超过 {stable_weibo_days} 天）",
     }
 
     logger.info(f"批量抓取用户: {uid}")
-    logger.info(f"抓取模式: {mode} - {mode_desc.get(mode, mode)}\n")
+    logger.info(f"抓取模式: {mode} - {mode_desc.get(mode, mode)}")
+    if mode == "new" and start_days > 0:
+        logger.info(f"起始时间: {start_days} 天前")
+    print()
 
     init_database()
 
@@ -90,7 +99,7 @@ def crawl_user(uid: str, mode: str = "history"):
             logger.error("登录失败，退出")
             return
 
-        crawler.crawl_blogger(uid, mode=mode)
+        crawler.crawl_blogger(uid, mode=mode, start_days=start_days)
 
     except Exception as e:
         logger.error(f"抓取出错: {e}")
