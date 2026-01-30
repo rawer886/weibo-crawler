@@ -88,13 +88,13 @@ def parse_weibo_time(time_str: str) -> str:
 
 
 def random_delay(base_delay: float, log_level: str = "debug"):
-    """随机延迟（基准值的 50%~150%）
+    """随机延迟（基准值的 ±25%）
 
     Args:
         base_delay: 基准延迟秒数
         log_level: 日志级别 ("debug" 或 "info")
     """
-    delay = random.uniform(base_delay * 0.5, base_delay * 1.5)
+    delay = random.uniform(base_delay * 0.75, base_delay * 1.25)
     if log_level == "info":
         logger.info(f"等待 {delay:.1f} 秒...")
         print()

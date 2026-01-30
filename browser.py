@@ -53,7 +53,8 @@ class BrowserManager:
                 available_width = primary.width
                 viewport_height = int(available_height * height_ratio)
                 viewport_width = int(available_width * width_ratio)
-                logger.info(f"检测到显示器: {primary.width}x{primary.height}, 设置视口: {viewport_width}x{viewport_height}")
+                if not CRAWLER_CONFIG["headless"]:
+                    logger.info(f"检测到显示器: {primary.width}x{primary.height}, 设置视口: {viewport_width}x{viewport_height}")
         except ImportError:
             logger.debug("screeninfo 未安装，使用默认视口大小")
         except Exception as e:
