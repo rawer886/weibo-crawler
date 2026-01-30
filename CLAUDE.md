@@ -1,77 +1,41 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Claude Code 工作指引。**请先阅读 `README.md` 了解项目用法和配置。**
 
-## Project Overview
+## 架构概览
 
-微博爬虫 (Weibo Crawler) - A Python web scraper for extracting Weibo posts and comments. Uses Playwright for browser automation, supports resume capability, comment reply relationships, and image downloading.
+**入口流程**: `main.py` → `commands.py` → `WeiboCrawler` (crawler.py)
 
-## Commands
+**核心模块**:
+- `crawler.py` - 爬虫调度器，协调各模块工作
+- `browser.py` - Playwright 浏览器生命周期、Cookie 持久化、登录处理
+- `api.py` - 微博移动端 API 客户端，`APICache` 实现持久化缓存
+- `parser.py` - DOM 解析，从 Playwright 页面提取微博/评论数据
+- `database.py` - SQLite 操作，使用上下文管理器管理连接
+- `image.py` - 图片下载，按 `{uid}/{YYYY-MM}/{mid}_{index}.jpg` 组织
+- `display.py` - 格式化控制台输出
+- `logger.py` - 彩色控制台 + 文件日志
+- `utils.py` - 时间解析工具
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
-playwright install chromium
+**数据目录**: `../data/`（项目同级目录）
 
-# Crawl single post
-python main.py https://weibo.com/1234567890/AbCdEfGhI
+## 关键实现细节
 
-# Bulk crawl user posts (stable posts only, >1 day old)
-python main.py https://weibo.com/u/1234567890
+**URL 格式**: 支持 `/u/UID`、`/UID`、`/UID/MID`，MID 可以是字母数字或纯数字
 
-# Bulk crawl including new posts
-python main.py https://weibo.com/u/1234567890 --mode new
+**反风控策略**: 可配置延迟（默认 15s ± 25% 随机抖动），编辑 `config.py` 调整
 
-# Utility scripts
-python scripts/show_stats.py              # Database statistics
-python scripts/show_post.py <mid>         # View post and comments
-python scripts/show_post.py <mid> -b      # View blogger comments only
-python scripts/show_blogger_replies.py <uid>  # View all blogger replies
-python scripts/delete_comments.py <mid>   # Delete comments for a post
-python scripts/delete_post.py <mid>       # Delete a post
+**登录机制**: 首次运行打开浏览器手动登录，Cookie 保存到 `cookies.json`，删除此文件可重新登录
 
-# Direct database access
-sqlite3 ../data/weibo.db "SELECT * FROM bloggers"
-```
+**按需列表获取**: history 模式下，当待处理队列不足时按需获取微博列表
 
-## Architecture
+**时间标准化**: 所有日期存储为 `YYYY-MM-DD HH:MM` 格式，`utils.parse_weibo_time()` 处理各种输入格式
 
-**Entry Flow:** `main.py` → `commands.py` → `WeiboCrawler` (crawler.py)
+**抓取进度**: `crawl_progress` 表记录每个用户的 `list_scan_oldest_mid`，支持断点续传
 
-**Core Modules:**
-- `crawler.py` - Orchestrates crawling, coordinates all modules
-- `browser.py` - Playwright browser lifecycle, cookie persistence, login handling
-- `api.py` - Weibo mobile API client with `APICache` for persistent caching
-- `parser.py` - DOM parsing for posts/comments from Playwright pages
-- `database.py` - SQLite operations with context-managed connections
-- `image.py` - Downloads and organizes images by `{uid}/{YYYY-MM}/{mid}_{index}.jpg`
-- `display.py` - Formatted console output
-- `logger.py` - Colored console + file logging
-- `utils.py` - Time parsing utilities
+## 数据库表
 
-**Data Directory:** `../data/` (sibling to project) contains:
-- `weibo.db` - SQLite database
-- `cookies.json` - Browser session
-- `cache/` - API response cache
-- `images/` - Downloaded images
-- `logs/` - Execution logs
-
-**Database Tables:**
-- `bloggers` - User info (uid, nickname, followers_count)
-- `posts` - Posts with `detail_status` tracking (0=pending, 1=fetched)
-- `comments` - Comments with reply relationships and blogger_reply flag
-- `crawl_progress` - Tracks `list_scan_oldest_mid` per user
-
-## Key Implementation Details
-
-**URL Formats:** Supports `/u/UID`, `/UID`, `/UID/MID` - MID can be alphanumeric or numeric
-
-**Anti-Risk Strategy:** Configurable delay (default 15s + random jitter) between requests. Edit `config.py` to adjust.
-
-**Login:** First run opens browser for manual login. Cookies saved to `cookies.json`. Delete this file to re-login.
-
-**Graceful Shutdown:** First Ctrl+C stops gracefully, second force exits. Uses global `_stopping` flag.
-
-**On-demand List Fetching:** History mode fetches post lists on-demand when the pending queue runs low.
-
-**Time Normalization:** All dates stored as `YYYY-MM-DD HH:MM`. `utils.parse_weibo_time()` handles various input formats.
+- `bloggers` - 用户信息（uid, nickname, followers_count）
+- `posts` - 微博，`detail_status` 字段追踪状态（0=待抓取, 1=已完成）
+- `comments` - 评论，含回复关系和 `blogger_reply` 标记
+- `crawl_progress` - 抓取进度
