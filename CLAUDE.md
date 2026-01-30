@@ -14,13 +14,13 @@ pip install -r requirements.txt
 playwright install chromium
 
 # Crawl single post
-python main.py https://weibo.com/1497035431/AbCdEfGhI
+python main.py https://weibo.com/1234567890/AbCdEfGhI
 
 # Bulk crawl user posts (stable posts only, >1 day old)
-python main.py https://weibo.com/u/1497035431
+python main.py https://weibo.com/u/1234567890
 
 # Bulk crawl including new posts
-python main.py https://weibo.com/u/1497035431 --mode new
+python main.py https://weibo.com/u/1234567890 --mode new
 
 # Utility scripts
 python scripts/show_stats.py              # Database statistics
