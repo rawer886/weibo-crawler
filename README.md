@@ -16,13 +16,13 @@ playwright install chromium
 
 ```bash
 # 抓取单条微博
-python main.py https://weibo.com/1497035431/AbCdEfGhI
+python main.py https://weibo.com/1234567890/AbCdEfGhI
 
 # 批量抓取用户微博（稳定微博，发布超过1天）
-python main.py https://weibo.com/u/1497035431
+python main.py https://weibo.com/u/1234567890
 
 # 抓取最新微博（包括未稳定的）
-python main.py https://weibo.com/u/1497035431 --mode new
+python main.py https://weibo.com/u/1234567890 --mode new
 
 # 查看统计信息
 python main.py --status
