@@ -385,12 +385,14 @@ class WeiboCrawler:
             # 获取待抓取的微博
             pending = get_posts_pending_detail(uid, stable_weibo_days, limit=min_queue_size + 5)
 
-            # 队列为空或不足时，尝试补充
-            if len(pending) < min_queue_size:
+            # 队列为空或不足时，持续补充直到有可抓取的或确实没有更多历史
+            while len(pending) < min_queue_size:
                 new_count = self._scan_post_list_batch(uid)
-                if new_count > 0:
-                    logger.info(f"补充列表，新增 {new_count} 条")
-                    pending = get_posts_pending_detail(uid, stable_weibo_days, limit=min_queue_size + 5)
+                if new_count == 0:
+                    # 没有更多历史微博了
+                    break
+                logger.info(f"补充列表，新增 {new_count} 条")
+                pending = get_posts_pending_detail(uid, stable_weibo_days, limit=min_queue_size + 5)
 
             if not pending:
                 logger.info("没有更多微博可抓取")
