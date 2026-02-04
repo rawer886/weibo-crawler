@@ -460,12 +460,15 @@ class PageParser:
                     }
                 }
 
-                // 博主微博的图片（不在转发区块和视频区块内）
+                // 博主微博的图片（只在正文区域 wbpro-feed-content 内查找，排除转发和视频区块）
                 const seenUrls = new Set();
-                document.querySelectorAll('.picture, [class*="woo-picture-main"]').forEach(container => {
-                    if (isInRetweet(container) || isInVideoBox(container)) return;
-                    collectImages(container, result.images, seenUrls);
-                });
+                const feedContent = document.querySelector('.wbpro-feed-content, [class*="_feed_zsq3w"]');
+                if (feedContent) {
+                    feedContent.querySelectorAll('.picture, [class*="woo-picture-main"]').forEach(container => {
+                        if (isInRetweet(container) || isInVideoBox(container)) return;
+                        collectImages(container, result.images, seenUrls);
+                    });
+                }
 
                 // 博主微博的视频（不在转发区块内）
                 for (const box of document.querySelectorAll('[class*="_videoBox_"], [class*="videoBox"]')) {
