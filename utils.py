@@ -20,6 +20,36 @@ logger = get_logger(__name__)
 BASE62_CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
+def _split_from_right(s: str, chunk_size: int) -> list:
+    """从右往左按固定长度分组，最左边可能不足指定长度"""
+    groups = []
+    i = len(s)
+    while i > 0:
+        start = max(0, i - chunk_size)
+        groups.insert(0, s[start:i])
+        i = start
+    return groups
+
+
+def _base62_decode(s: str) -> int:
+    """Base62 解码"""
+    result = 0
+    for char in s:
+        result = result * 62 + BASE62_CHARS.index(char)
+    return result
+
+
+def _base62_encode(num: int) -> str:
+    """Base62 编码"""
+    if num == 0:
+        return "0"
+    result = ""
+    while num > 0:
+        result = BASE62_CHARS[num % 62] + result
+        num //= 62
+    return result
+
+
 def mid_to_numeric(mid: str) -> str:
     """将短格式 mid（base62）转换为纯数字 mid
 
@@ -29,44 +59,14 @@ def mid_to_numeric(mid: str) -> str:
 
     示例: QrkVr3ze5 -> 5132657891234567
     """
-    if not mid:
+    if not mid or mid.isdigit():
         return mid
-
-    # 已经是纯数字，直接返回
-    if mid.isdigit():
-        return mid
-
-    # base62 解码
-    def base62_decode(s: str) -> int:
-        result = 0
-        for char in s:
-            result = result * 62 + BASE62_CHARS.index(char)
-        return result
 
     # 按 4 位分组解码（对应数字 mid 的 7 位）
-    # 短 mid 分组方式：从右往左，每 4 位一组，最左边可能不足 4 位
-    result = ""
-    mid_len = len(mid)
-
-    # 计算分组
-    groups = []
-    i = mid_len
-    while i > 0:
-        start = max(0, i - 4)
-        groups.insert(0, mid[start:i])
-        i = start
-
-    # 解码每组
-    for idx, group in enumerate(groups):
-        num = base62_decode(group)
-        if idx == 0:
-            # 第一组不补零
-            result += str(num)
-        else:
-            # 后续组补零到 7 位
-            result += str(num).zfill(7)
-
-    return result
+    groups = _split_from_right(mid, 4)
+    parts = [str(_base62_decode(groups[0]))]
+    parts.extend(str(_base62_decode(g)).zfill(7) for g in groups[1:])
+    return "".join(parts)
 
 
 def numeric_to_mid(numeric_mid: str) -> str:
@@ -74,46 +74,14 @@ def numeric_to_mid(numeric_mid: str) -> str:
 
     示例: 5132657891234567 -> QrkVr3ze5
     """
-    if not numeric_mid:
+    if not numeric_mid or not numeric_mid.isdigit():
         return numeric_mid
 
-    # 已经是短格式，直接返回
-    if not numeric_mid.isdigit():
-        return numeric_mid
-
-    # base62 编码
-    def base62_encode(num: int) -> str:
-        if num == 0:
-            return "0"
-        result = ""
-        while num > 0:
-            result = BASE62_CHARS[num % 62] + result
-            num //= 62
-        return result
-
-    # 按 7 位分组编码
-    result = ""
-    numeric_len = len(numeric_mid)
-
-    # 从右往左，每 7 位一组
-    groups = []
-    i = numeric_len
-    while i > 0:
-        start = max(0, i - 7)
-        groups.insert(0, numeric_mid[start:i])
-        i = start
-
-    # 编码每组
-    for idx, group in enumerate(groups):
-        encoded = base62_encode(int(group))
-        if idx == 0:
-            # 第一组不补零
-            result += encoded
-        else:
-            # 后续组补零到 4 位
-            result += encoded.zfill(4)
-
-    return result
+    # 按 7 位分组编码（对应 base62 的 4 位）
+    groups = _split_from_right(numeric_mid, 7)
+    parts = [_base62_encode(int(groups[0]))]
+    parts.extend(_base62_encode(int(g)).zfill(4) for g in groups[1:])
+    return "".join(parts)
 
 
 def parse_weibo_time(time_str: str) -> str:

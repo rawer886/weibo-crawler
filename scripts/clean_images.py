@@ -88,79 +88,60 @@ def scan_images(dry_run: bool = False) -> list:
     return files_to_delete
 
 
+def _update_media_field(cursor, table: str, field: str, id_field: str,
+                         deleted_set: set, dry_run: bool) -> int:
+    """更新 posts 表的 media/repost_media 字段，返回更新数量"""
+    updated = 0
+    cursor.execute(f"SELECT {id_field}, {field} FROM {table} WHERE {field} IS NOT NULL")
+
+    for row_id, media_json in cursor.fetchall():
+        if not media_json:
+            continue
+
+        try:
+            media = json.loads(media_json)
+            images = media.get("images", [])
+            modified = False
+
+            for img in images:
+                local_path = img.get("local")
+                if local_path and local_path in deleted_set:
+                    img["local"] = None
+                    modified = True
+                    print(f"[更新] {table}.{field} {id_field}={row_id}: 移除 {local_path}")
+
+            if modified:
+                if not dry_run:
+                    cursor.execute(
+                        f"UPDATE {table} SET {field} = ? WHERE {id_field} = ?",
+                        (json.dumps(media, ensure_ascii=False), row_id)
+                    )
+                updated += 1
+        except json.JSONDecodeError:
+            pass
+
+    return updated
+
+
 def update_database(deleted_paths: list, dry_run: bool = False):
     """更新数据库，移除被删除的图片路径"""
     if not deleted_paths:
         print("[信息] 没有需要更新的数据库记录")
         return
 
-    # 转换为集合，方便查找
     deleted_set = set(deleted_paths)
-
     conn = sqlite3.connect(DATABASE_PATH)
     cursor = conn.cursor()
 
+    # 更新 posts 表的 media 和 repost_media 字段
     updated_posts = 0
-    updated_comments = 0
-
-    # 更新 posts 表的 media 字段
-    cursor.execute("SELECT mid, media FROM posts WHERE media IS NOT NULL")
-    for mid, media_json in cursor.fetchall():
-        if not media_json:
-            continue
-
-        try:
-            media = json.loads(media_json)
-            images = media.get("images", [])
-            modified = False
-
-            for img in images:
-                local_path = img.get("local")
-                if local_path and local_path in deleted_set:
-                    img["local"] = None
-                    modified = True
-                    print(f"[更新] posts.media mid={mid}: 移除 {local_path}")
-
-            if modified:
-                if not dry_run:
-                    cursor.execute(
-                        "UPDATE posts SET media = ? WHERE mid = ?",
-                        (json.dumps(media, ensure_ascii=False), mid)
-                    )
-                updated_posts += 1
-        except json.JSONDecodeError:
-            pass
-
-    # 更新 posts 表的 repost_media 字段
-    cursor.execute("SELECT mid, repost_media FROM posts WHERE repost_media IS NOT NULL")
-    for mid, media_json in cursor.fetchall():
-        if not media_json:
-            continue
-
-        try:
-            media = json.loads(media_json)
-            images = media.get("images", [])
-            modified = False
-
-            for img in images:
-                local_path = img.get("local")
-                if local_path and local_path in deleted_set:
-                    img["local"] = None
-                    modified = True
-                    print(f"[更新] posts.repost_media mid={mid}: 移除 {local_path}")
-
-            if modified:
-                if not dry_run:
-                    cursor.execute(
-                        "UPDATE posts SET repost_media = ? WHERE mid = ?",
-                        (json.dumps(media, ensure_ascii=False), mid)
-                    )
-                updated_posts += 1
-        except json.JSONDecodeError:
-            pass
+    updated_posts += _update_media_field(cursor, "posts", "media", "mid", deleted_set, dry_run)
+    updated_posts += _update_media_field(cursor, "posts", "repost_media", "mid", deleted_set, dry_run)
 
     # 更新 comments 表的 local_images 字段
+    updated_comments = 0
     cursor.execute("SELECT comment_id, local_images FROM comments WHERE local_images IS NOT NULL")
+
     for comment_id, local_images_json in cursor.fetchall():
         if not local_images_json:
             continue
@@ -171,18 +152,19 @@ def update_database(deleted_paths: list, dry_run: bool = False):
                 continue
 
             new_images = [p for p in local_images if p not in deleted_set]
+            if len(new_images) == len(local_images):
+                continue
 
-            if len(new_images) != len(local_images):
-                removed = set(local_images) - set(new_images)
-                for p in removed:
-                    print(f"[更新] comments.local_images comment_id={comment_id}: 移除 {p}")
+            removed = set(local_images) - set(new_images)
+            for p in removed:
+                print(f"[更新] comments.local_images comment_id={comment_id}: 移除 {p}")
 
-                if not dry_run:
-                    cursor.execute(
-                        "UPDATE comments SET local_images = ? WHERE comment_id = ?",
-                        (json.dumps(new_images, ensure_ascii=False) if new_images else None, comment_id)
-                    )
-                updated_comments += 1
+            if not dry_run:
+                cursor.execute(
+                    "UPDATE comments SET local_images = ? WHERE comment_id = ?",
+                    (json.dumps(new_images, ensure_ascii=False) if new_images else None, comment_id)
+                )
+            updated_comments += 1
         except json.JSONDecodeError:
             pass
 
@@ -190,7 +172,6 @@ def update_database(deleted_paths: list, dry_run: bool = False):
         conn.commit()
 
     conn.close()
-
     print(f"\n[统计] 更新了 {updated_posts} 条微博记录，{updated_comments} 条评论记录")
 
 
