@@ -18,10 +18,10 @@ from logger import setup_logging, get_logger
 from utils import random_delay
 from database import (
     save_blogger, save_post, update_post, save_comment,
-    is_post_exists, update_post_local_images, update_post_repost_local_images,
+    is_post_exists, is_post_detail_done, update_post_local_images, update_post_repost_local_images,
     update_comment_likes, get_blogger,
     save_post_from_list, get_posts_pending_detail, mark_post_detail_done,
-    get_list_scan_oldest_mid, update_list_scan_oldest_mid
+    get_crawl_progress, update_history_start, update_history_end, init_crawl_progress
 )
 from browser import BrowserManager
 from api import WeiboAPI
@@ -256,8 +256,17 @@ class WeiboCrawler:
             self._crawl_pending_details(uid, stable_weibo_days)
             return
 
-        # 新微博模式：不使用缓存，抓取到与历史数据衔接为止
+        # 新微博模式：抓取到与 history_start 衔接为止
         logger.info("=== 抓取最新微博 ===")
+
+        # 获取已抓区间边界
+        progress = get_crawl_progress(uid)
+        history_start_mid = progress.get('history_start_mid')
+        history_start_time = progress.get('history_start_time')
+        if history_start_mid:
+            logger.info(f"已抓区间开始点: {history_start_mid} ({history_start_time})")
+        else:
+            logger.info("首次运行 new 模式，将扫描到时间边界")
 
         # 计算截止时间（跳过最近 N*24 小时的微博）
         cutoff_time = None
@@ -265,36 +274,61 @@ class WeiboCrawler:
             cutoff_time = datetime.now() - timedelta(days=start_days)
             logger.info(f"从 {cutoff_time.strftime('%Y-%m-%d %H:%M')} 开始抓取，跳过之后的微博")
 
-        consecutive_exists = 0
-        max_consecutive = 5
+        # 追踪扫描位置
+        newest_stable_mid = None  # 扫描范围的最新稳定微博
+        newest_stable_time = None
+        oldest_mid = None  # 扫描到的最老位置
+        oldest_time = None
         posts_processed = 0
         max_posts = CRAWLER_CONFIG.get("max_posts_per_run", 100)
+        linked = False  # 是否成功衔接
 
         for post in self._iter_post_list(uid, cache_max_age=0):
             mid = post["mid"]
+            created_at = post.get("created_at")
 
-            # 跳过截止时间之后的微博（太新的）
-            if cutoff_time and post.get("created_at"):
+            # 更新扫描到的最老位置
+            oldest_mid = mid
+            oldest_time = created_at
+
+            # 跳过截止时间之后的微博（太新的/不稳定的）
+            is_stable = True
+            if cutoff_time and created_at:
                 try:
-                    post_time = datetime.strptime(post["created_at"], "%Y-%m-%d %H:%M")
+                    post_time = datetime.strptime(created_at, "%Y-%m-%d %H:%M")
                     if post_time > cutoff_time:
-                        logger.debug(f"跳过太新的微博 {mid} ({post['created_at']})")
-                        continue
+                        logger.debug(f"跳过太新的微博 {mid} ({created_at})")
+                        is_stable = False
                 except:
                     pass
 
-            if is_post_exists(mid):
-                consecutive_exists += 1
-                logger.debug(f"微博 {mid} 已存在 ({consecutive_exists}/{max_consecutive})")
-                if consecutive_exists >= max_consecutive:
-                    logger.info(f"连续 {max_consecutive} 条微博已存在，与历史数据衔接，停止")
-                    break
+            # 记录第一个稳定微博作为 newest_stable
+            if is_stable and newest_stable_mid is None:
+                newest_stable_mid = mid
+                newest_stable_time = created_at
+
+            if not is_stable:
                 continue
 
-            # 遇到新微博，重置计数
-            consecutive_exists = 0
-            posts_processed += 1
+            # 衔接判断：到达 history_start
+            if history_start_mid:
+                if mid == history_start_mid:
+                    logger.info(f"已与历史数据衔接 (mid={mid})")
+                    linked = True
+                    break
+                # 备用判断：时间到达
+                if history_start_time and created_at and created_at <= history_start_time:
+                    logger.info(f"已到达历史数据时间点 ({created_at})")
+                    linked = True
+                    break
 
+            # 已存在的微博跳过
+            if is_post_exists(mid):
+                logger.debug(f"微博 {mid} 已存在，跳过")
+                continue
+
+            # 抓取新微博
+            posts_processed += 1
             logger.info(f"处理第 {posts_processed} 条新微博: {mid}")
             self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False,
                                    stable_weibo_days=stable_weibo_days)
@@ -304,6 +338,18 @@ class WeiboCrawler:
                 break
 
             random_delay(CRAWLER_CONFIG["delay"], log_level="info")
+
+        # 更新进度（仅在衔接成功或正常结束时）
+        if linked or (not history_start_mid and oldest_mid):
+            # 衔接成功：更新 history_start
+            if newest_stable_mid:
+                update_history_start(uid, newest_stable_mid, newest_stable_time)
+                logger.info(f"更新已抓区间开始点: {newest_stable_mid}")
+
+            # 首次运行且正常结束：同时设置 history_end
+            if not history_start_mid and oldest_mid:
+                update_history_end(uid, oldest_mid, oldest_time)
+                logger.info(f"设置已抓区间结束点: {oldest_mid}")
 
         if posts_processed == 0:
             logger.info("没有新微博")
@@ -344,31 +390,45 @@ class WeiboCrawler:
             current_since_id = next_since_id
             page += 1
 
-    def _scan_post_list_batch(self, uid: str, batch_size: int = 20) -> int:
+    def _scan_post_list_batch(self, uid: str, batch_size: int = 20) -> tuple[int, str, str]:
         """扫描一批微博列表并保存
 
-        返回新增的微博数量
+        返回: (新增数量, 最老mid, 最老时间)
         """
-        since_id = get_list_scan_oldest_mid(uid)
+        progress = get_crawl_progress(uid)
+        since_id = progress.get('history_end_mid')
 
         posts, _, reached_cutoff = self.api.get_post_list(
             uid, since_id=since_id, max_count=batch_size, check_date=True
         )
 
         if not posts:
-            return 0
+            return 0, None, None
 
         saved_count = 0
         oldest_mid = None
+        oldest_time = None
+        first_mid = None
+        first_time = None
+
         for post in posts:
+            if first_mid is None:
+                first_mid = post["mid"]
+                first_time = post.get("created_at")
             oldest_mid = post["mid"]
+            oldest_time = post.get("created_at")
             if save_post_from_list(post):
                 saved_count += 1
 
+        # 更新 history_end（最老边界）
         if oldest_mid:
-            update_list_scan_oldest_mid(uid, oldest_mid)
+            update_history_end(uid, oldest_mid, oldest_time)
 
-        return saved_count
+        # 首次运行时设置 history_start（最新边界）
+        if not progress.get('history_start_mid') and first_mid:
+            update_history_start(uid, first_mid, first_time)
+
+        return saved_count, oldest_mid, oldest_time
 
     def _crawl_pending_details(self, uid: str, stable_weibo_days: int):
         """抓取未抓详情的微博（detail_status=0 且超过 stable_weibo_days）
@@ -387,7 +447,7 @@ class WeiboCrawler:
 
             # 队列为空或不足时，持续补充直到有可抓取的或确实没有更多历史
             while len(pending) < min_queue_size:
-                new_count = self._scan_post_list_batch(uid)
+                new_count, _, _ = self._scan_post_list_batch(uid)
                 if new_count == 0:
                     # 没有更多历史微博了
                     break

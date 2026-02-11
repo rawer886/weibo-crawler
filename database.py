@@ -85,10 +85,24 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS crawl_progress (
                 uid TEXT PRIMARY KEY,
-                list_scan_oldest_mid TEXT,
+                history_start_mid TEXT,
+                history_start_time TEXT,
+                history_end_mid TEXT,
+                history_end_time TEXT,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # 迁移：检查并添加新字段
+        cursor.execute("PRAGMA table_info(crawl_progress)")
+        columns = [row[1] for row in cursor.fetchall()]
+        # 迁移旧字段
+        if "list_scan_oldest_mid" in columns and "history_end_mid" not in columns:
+            conn.execute("ALTER TABLE crawl_progress RENAME COLUMN list_scan_oldest_mid TO history_end_mid")
+        # 添加新字段
+        for col in ["history_start_mid", "history_start_time", "history_end_mid", "history_end_time"]:
+            if col not in columns:
+                conn.execute(f"ALTER TABLE crawl_progress ADD COLUMN {col} TEXT")
 
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_uid ON posts(uid)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at)")
@@ -289,6 +303,15 @@ def is_post_exists(mid: str) -> bool:
     """检查微博是否已存在"""
     with get_connection() as conn:
         cursor = conn.execute("SELECT 1 FROM posts WHERE mid = ?", (mid,))
+        return cursor.fetchone() is not None
+
+
+def is_post_detail_done(mid: str) -> bool:
+    """检查微博详情是否已抓取完成（detail_status=1）"""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "SELECT 1 FROM posts WHERE mid = ? AND detail_status = 1", (mid,)
+        )
         return cursor.fetchone() is not None
 
 
@@ -496,24 +519,81 @@ def mark_post_detail_done(mid: str):
         conn.commit()
 
 
-def get_list_scan_oldest_mid(uid: str) -> Optional[str]:
-    """获取列表扫描的最老微博 ID"""
+def get_crawl_progress(uid: str) -> dict:
+    """获取抓取进度
+
+    返回: {
+        'history_start_mid': str,  # 已抓区间最新边界
+        'history_start_time': str,
+        'history_end_mid': str,    # 已抓区间最老边界
+        'history_end_time': str,
+    }
+    """
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT list_scan_oldest_mid FROM crawl_progress WHERE uid = ?", (uid,)
+            """SELECT history_start_mid, history_start_time,
+                      history_end_mid, history_end_time
+               FROM crawl_progress WHERE uid = ?""",
+            (uid,)
         ).fetchone()
-        return row[0] if row and row[0] else None
+        if row:
+            return {
+                'history_start_mid': row[0],
+                'history_start_time': row[1],
+                'history_end_mid': row[2],
+                'history_end_time': row[3],
+            }
+        return {}
 
 
-def update_list_scan_oldest_mid(uid: str, mid: str):
-    """更新列表扫描进度"""
+def update_history_start(uid: str, mid: str, created_at: str):
+    """更新已抓区间的最新边界（new 模式衔接成功时调用）"""
     with get_connection() as conn:
         now = datetime.now().isoformat()
         conn.execute("""
-            INSERT INTO crawl_progress (uid, list_scan_oldest_mid, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(uid) DO UPDATE SET list_scan_oldest_mid = ?, updated_at = ?
-        """, (uid, mid, now, mid, now))
+            INSERT INTO crawl_progress (uid, history_start_mid, history_start_time, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(uid) DO UPDATE SET
+                history_start_mid = ?,
+                history_start_time = ?,
+                updated_at = ?
+        """, (uid, mid, created_at, now, mid, created_at, now))
+        conn.commit()
+
+
+def update_history_end(uid: str, mid: str, created_at: str):
+    """更新已抓区间的最老边界（history 模式调用）"""
+    with get_connection() as conn:
+        now = datetime.now().isoformat()
+        conn.execute("""
+            INSERT INTO crawl_progress (uid, history_end_mid, history_end_time, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(uid) DO UPDATE SET
+                history_end_mid = ?,
+                history_end_time = ?,
+                updated_at = ?
+        """, (uid, mid, created_at, now, mid, created_at, now))
+        conn.commit()
+
+
+def init_crawl_progress(uid: str, start_mid: str, start_time: str,
+                        end_mid: str, end_time: str):
+    """初始化抓取进度（首次运行时调用）"""
+    with get_connection() as conn:
+        now = datetime.now().isoformat()
+        conn.execute("""
+            INSERT INTO crawl_progress
+                (uid, history_start_mid, history_start_time,
+                 history_end_mid, history_end_time, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(uid) DO UPDATE SET
+                history_start_mid = COALESCE(crawl_progress.history_start_mid, ?),
+                history_start_time = COALESCE(crawl_progress.history_start_time, ?),
+                history_end_mid = ?,
+                history_end_time = ?,
+                updated_at = ?
+        """, (uid, start_mid, start_time, end_mid, end_time, now,
+              start_mid, start_time, end_mid, end_time, now))
         conn.commit()
 
 
