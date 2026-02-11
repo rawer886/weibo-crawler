@@ -4,6 +4,7 @@
 职责：
 - 通用时间解析
 - 随机延迟
+- mid 格式转换
 - 其他共享工具函数
 """
 import random
@@ -14,6 +15,105 @@ from datetime import datetime, timedelta
 from logger import get_logger
 
 logger = get_logger(__name__)
+
+# Base62 字符表（微博 mid 编码用）
+BASE62_CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def mid_to_numeric(mid: str) -> str:
+    """将短格式 mid（base62）转换为纯数字 mid
+
+    微博 mid 编码规则：
+    - 纯数字 mid 按每 7 位分组，每组独立转为 base62（4位）
+    - 最后不足 7 位的部分单独转换
+
+    示例: QrkVr3ze5 -> 5132657891234567
+    """
+    if not mid:
+        return mid
+
+    # 已经是纯数字，直接返回
+    if mid.isdigit():
+        return mid
+
+    # base62 解码
+    def base62_decode(s: str) -> int:
+        result = 0
+        for char in s:
+            result = result * 62 + BASE62_CHARS.index(char)
+        return result
+
+    # 按 4 位分组解码（对应数字 mid 的 7 位）
+    # 短 mid 分组方式：从右往左，每 4 位一组，最左边可能不足 4 位
+    result = ""
+    mid_len = len(mid)
+
+    # 计算分组
+    groups = []
+    i = mid_len
+    while i > 0:
+        start = max(0, i - 4)
+        groups.insert(0, mid[start:i])
+        i = start
+
+    # 解码每组
+    for idx, group in enumerate(groups):
+        num = base62_decode(group)
+        if idx == 0:
+            # 第一组不补零
+            result += str(num)
+        else:
+            # 后续组补零到 7 位
+            result += str(num).zfill(7)
+
+    return result
+
+
+def numeric_to_mid(numeric_mid: str) -> str:
+    """将纯数字 mid 转换为短格式 mid（base62）
+
+    示例: 5132657891234567 -> QrkVr3ze5
+    """
+    if not numeric_mid:
+        return numeric_mid
+
+    # 已经是短格式，直接返回
+    if not numeric_mid.isdigit():
+        return numeric_mid
+
+    # base62 编码
+    def base62_encode(num: int) -> str:
+        if num == 0:
+            return "0"
+        result = ""
+        while num > 0:
+            result = BASE62_CHARS[num % 62] + result
+            num //= 62
+        return result
+
+    # 按 7 位分组编码
+    result = ""
+    numeric_len = len(numeric_mid)
+
+    # 从右往左，每 7 位一组
+    groups = []
+    i = numeric_len
+    while i > 0:
+        start = max(0, i - 7)
+        groups.insert(0, numeric_mid[start:i])
+        i = start
+
+    # 编码每组
+    for idx, group in enumerate(groups):
+        encoded = base62_encode(int(group))
+        if idx == 0:
+            # 第一组不补零
+            result += encoded
+        else:
+            # 后续组补零到 4 位
+            result += encoded.zfill(4)
+
+    return result
 
 
 def parse_weibo_time(time_str: str) -> str:

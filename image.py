@@ -15,6 +15,7 @@ import requests
 
 from config import CRAWLER_CONFIG, IMAGES_DIR
 from logger import get_logger
+from utils import mid_to_numeric
 
 logger = get_logger(__name__)
 
@@ -36,30 +37,54 @@ class ImageDownloader:
     def download_post_images(self, post: dict) -> List[str]:
         """下载微博图片
 
-        目录结构: images/{uid}/{YYYY-MM}/{mid}_{index}.jpg
+        目录结构: images/{uid}/{YYYY-MM}/{mid(纯数字)}_{index}.jpg
         """
         date_str = self._parse_date(post.get("created_at", ""))
+        # 统一转换为纯数字 mid
+        numeric_mid = mid_to_numeric(post["mid"])
         return self._download_images(
             images=post.get("images", []),
             uid=post["uid"],
             date_str=date_str,
             prefix="",
-            entity_id=post["mid"]
+            entity_id=numeric_mid
         )
 
     def download_repost_images(self, post: dict) -> List[str]:
         """下载原微博图片（转发的原微博）
 
-        目录结构: images/{uid}/{YYYY-MM}/repost_{mid}_{index}.jpg
+        目录结构: images/{原微博uid}/{原微博YYYY-MM}/{原微博mid(纯数字)}_{index}.jpg
+        如果无法获取原微博信息，回退到: images/{转发者uid}/{YYYY-MM}/repost_{转发mid}_{index}.jpg
+
+        使用原微博的 uid、mid、发布时间，确保与原微博图片路径一致实现去重
         """
-        date_str = self._parse_date(post.get("created_at", ""))
-        return self._download_images(
-            images=post.get("repost_images", []),
-            uid=post["uid"],
-            date_str=date_str,
-            prefix="repost_",
-            entity_id=post["mid"]
-        )
+        # 优先使用原微博的 uid 和 mid，实现图片去重
+        repost_uid = post.get("repost_uid")
+        repost_mid = post.get("repost_mid")
+        repost_created_at = post.get("repost_created_at")
+
+        if repost_uid and repost_mid:
+            # 统一转换为纯数字 mid，确保去重
+            numeric_mid = mid_to_numeric(repost_mid)
+            # 使用原微博的发布时间，确保路径与原微博一致
+            date_str = self._parse_date(repost_created_at or post.get("created_at", ""))
+            return self._download_images(
+                images=post.get("repost_images", []),
+                uid=repost_uid,
+                date_str=date_str,
+                prefix="",
+                entity_id=numeric_mid
+            )
+        else:
+            # 回退：无法获取原微博信息时使用转发微博信息
+            date_str = self._parse_date(post.get("created_at", ""))
+            return self._download_images(
+                images=post.get("repost_images", []),
+                uid=post["uid"],
+                date_str=date_str,
+                prefix="repost_",
+                entity_id=post["mid"]
+            )
 
     def download_comment_images(self, comment: dict, post_uid: str) -> List[str]:
         """下载评论图片

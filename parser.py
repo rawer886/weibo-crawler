@@ -89,6 +89,9 @@ class PageParser:
                 "is_repost": post_data.get("is_repost", False),
                 "repost_content": post_data.get("repost_content", ""),
                 "repost_images": post_data.get("repost_images", []),
+                "repost_uid": post_data.get("repost_uid"),
+                "repost_mid": post_data.get("repost_mid"),
+                "repost_created_at": parse_weibo_time(post_data.get("repost_created_at", "")),
                 "repost_video": post_data.get("repost_video"),
                 "images": post_data.get("images", []),
                 "video": post_data.get("video"),
@@ -296,6 +299,9 @@ class PageParser:
                     is_repost: false,
                     repost_content: '',
                     repost_images: [],
+                    repost_uid: null,
+                    repost_mid: null,
+                    repost_created_at: null,
                     video: null,
                     repost_video: null
                 };
@@ -397,6 +403,26 @@ class PageParser:
 
                 if (retweetArea) {
                     result.is_repost = true;
+
+                    // 提取原微博链接中的 uid、mid 和发布时间
+                    // 链接格式: https://weibo.com/{uid}/{mid}，时间在同一个 a 标签的文本中
+                    const repostLinks = retweetArea.querySelectorAll('a[href*="weibo.com/"]');
+                    for (const link of repostLinks) {
+                        const href = link.href || link.getAttribute('href');
+                        if (href) {
+                            const match = href.match(/weibo\\.com\\/([\\d]+)\\/([a-zA-Z0-9]+)/);
+                            if (match) {
+                                result.repost_uid = match[1];
+                                result.repost_mid = match[2];
+                                // 提取原微博发布时间（在同一个链接的文本中，如 "26-2-11 15:09"）
+                                const timeText = link.textContent.trim();
+                                if (timeText && /\\d/.test(timeText)) {
+                                    result.repost_created_at = timeText;
+                                }
+                                break;
+                            }
+                        }
+                    }
 
                     // 原微博内容（支持纯表情）
                     const reTextElem = retweetArea.querySelector('[class*="_wbtext_"], [class*="wbtext"]');
