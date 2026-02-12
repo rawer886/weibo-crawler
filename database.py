@@ -519,6 +519,13 @@ def mark_post_detail_done(mid: str):
         conn.commit()
 
 
+def mark_post_inaccessible(mid: str):
+    """标记微博不可访问（已删除/无权限），设置 detail_status=2"""
+    with get_connection() as conn:
+        conn.execute("UPDATE posts SET detail_status = 2 WHERE mid = ?", (mid,))
+        conn.commit()
+
+
 def get_crawl_progress(uid: str) -> dict:
     """获取抓取进度
 

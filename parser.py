@@ -17,12 +17,33 @@ logger = get_logger(__name__)
 class PageParser:
     """页面解析器"""
 
+    # 不可访问的微博提示文本
+    INACCESSIBLE_HINTS = ["暂无查看权限", "该微博已被删除", "微博不存在", "内容已被删除"]
+
     def __init__(self, page):
         """
         参数:
             page: Playwright Page 对象
         """
         self.page = page
+
+    def check_inaccessible(self) -> bool:
+        """检查微博是否不可访问（已删除/无权限）
+
+        返回:
+            True 表示微博不可访问
+        """
+        try:
+            # 检查页面中是否包含不可访问的提示
+            for hint in self.INACCESSIBLE_HINTS:
+                elem = self.page.locator(f'text="{hint}"').first
+                if elem.count() > 0:
+                    logger.info(f"检测到微博不可访问: {hint}")
+                    return True
+            return False
+        except Exception as e:
+            logger.debug(f"检查微博访问状态失败: {e}")
+            return False
 
     def parse_numeric_mid(self) -> str:
         """从当前页面解析数字格式的 mid

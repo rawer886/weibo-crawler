@@ -20,7 +20,7 @@ from database import (
     save_blogger, save_post, update_post, save_comment,
     is_post_exists, is_post_detail_done, update_post_local_images, update_post_repost_local_images,
     update_comment_likes, get_blogger,
-    save_post_from_list, get_posts_pending_detail, mark_post_detail_done,
+    save_post_from_list, get_posts_pending_detail, mark_post_detail_done, mark_post_inaccessible,
     get_crawl_progress, update_history_start, update_history_end, init_crawl_progress
 )
 from browser import BrowserManager
@@ -103,6 +103,7 @@ class WeiboCrawler:
             "post": None,
             "comments": [],
             "success": False,  # 微博是否成功处理（保存或已存在）
+            "inaccessible": False,  # 微博是否不可访问（已删除/无权限）
             "stats": {
                 "post_saved": False,
                 "comments_saved": 0,
@@ -129,11 +130,17 @@ class WeiboCrawler:
         if not skip_blogger_check:
             self._ensure_blogger_exists(uid)
 
-        # 3. 解析微博内容
+        # 3. 检查微博是否不可访问
+        if self.parser.check_inaccessible():
+            logger.warning(f"微博不可访问（已删除或无权限）: {mid}")
+            result["inaccessible"] = True
+            return result
+
+        # 4. 解析微博内容
         post = self.parser.parse_post(uid, mid, source_url=source_url)
         result["post"] = post
 
-        # 4. 保存微博（有文本、图片、视频，或转发的原微博有内容即可保存）
+        # 5. 保存微博（有文本、图片、视频，或转发的原微博有内容即可保存）
         has_content = post and (
             post.get("content") or post.get("images") or post.get("video") or
             post.get("repost_content") or post.get("repost_images") or post.get("repost_video")
@@ -146,14 +153,14 @@ class WeiboCrawler:
             result["stats"]["post_saved"] = is_new
             result["success"] = True  # 成功保存或已存在
 
-            # 5. 下载微博图片
+            # 6. 下载微博图片
             if post.get("images"):
                 local_paths = self.image_downloader.download_post_images(post)
                 result["stats"]["images_downloaded"] = len(local_paths)
                 if local_paths:
                     update_post_local_images(mid, local_paths)
 
-            # 6. 下载原微博图片（如果是转发）
+            # 7. 下载原微博图片（如果是转发）
             if post.get("repost_images"):
                 repost_local_paths = self.image_downloader.download_repost_images(post)
                 result["stats"]["repost_images_downloaded"] = len(repost_local_paths)
@@ -163,7 +170,7 @@ class WeiboCrawler:
             # 跳过保存时 success 保持 False，不会标记 detail_status 为已抓取
             logger.warning(f"微博无有效内容（无文本、图片或视频），跳过保存: {mid}")
 
-        # 7. 抓取评论（评论数为 0 时跳过）
+        # 8. 抓取评论（评论数为 0 时跳过）
         comments_count = post.get("comments_count", 0) if post else 0
         if comments_count > 0:
             print()
@@ -225,11 +232,12 @@ class WeiboCrawler:
         else:
             logger.info("评论数为 0，跳过评论抓取")
 
-        # 8. 展示抓取结果（从数据库读取）
+        # 9. 展示抓取结果（从数据库读取）
         print()
         logger.info("抓取完成")
         print()
-        display_post_with_comments(mid, show_comments=show_comments)
+        if not result["inaccessible"]:
+            display_post_with_comments(mid, show_comments=show_comments)
         return result
 
     def crawl_blogger(self, uid: str, mode: str = "history", start_days: int = 0):
@@ -463,7 +471,9 @@ class WeiboCrawler:
             logger.info(f"[{processed}/{max_count}] 抓取: {mid}")
             result = self.crawl_single_post(uid, mid, skip_blogger_check=True, show_comments=False)
 
-            if result["success"]:
+            if result["inaccessible"]:
+                mark_post_inaccessible(mid)
+            elif result["success"]:
                 mark_post_detail_done(mid)
 
             if processed < max_count:
