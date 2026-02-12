@@ -6,7 +6,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from display import display_post_with_comments
+from src.display import display_post_with_comments
 
 USAGE = """用法: python scripts/show_post.py <微博ID> [-b]
 

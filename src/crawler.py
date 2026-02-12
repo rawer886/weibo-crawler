@@ -13,21 +13,21 @@ import time
 from datetime import datetime, timedelta
 from typing import Generator
 
-from config import CRAWLER_CONFIG
-from logger import setup_logging, get_logger
-from utils import random_delay
-from database import (
+from .config import CRAWLER_CONFIG
+from .logger import setup_logging, get_logger
+from .utils import random_delay
+from .database import (
     save_blogger, save_post, update_post, save_comment,
     is_post_exists, is_post_detail_done, update_post_local_images, update_post_repost_local_images,
     update_comment_likes, get_blogger,
     save_post_from_list, get_posts_pending_detail, mark_post_detail_done, mark_post_inaccessible,
     get_crawl_progress, update_history_start, update_history_end, init_crawl_progress
 )
-from browser import BrowserManager
-from api import WeiboAPI
-from parser import PageParser
-from image import ImageDownloader
-from display import display_post_with_comments, Colors
+from .browser import BrowserManager
+from .api import WeiboAPI
+from .parser import PageParser
+from .image import ImageDownloader
+from .display import display_post_with_comments, Colors
 
 # 初始化日志
 setup_logging()

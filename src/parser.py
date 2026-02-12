@@ -8,8 +8,8 @@
 import hashlib
 from typing import Optional
 
-from logger import get_logger
-from utils import parse_weibo_time
+from .logger import get_logger
+from .utils import parse_weibo_time
 
 logger = get_logger(__name__)
 

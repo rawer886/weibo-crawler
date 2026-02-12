@@ -9,7 +9,8 @@ import os
 # 数据目录
 # =============================================================================
 # 数据存储在项目同级的 data 目录下，包含数据库、缓存、图片、日志等
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# src/config.py -> src -> crawler -> data (项目同级)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(os.path.dirname(BASE_DIR), "data")
 
 # 确保数据目录存在

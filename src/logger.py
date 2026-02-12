@@ -9,7 +9,7 @@
 import logging
 import os
 
-from config import DATA_DIR, CRAWLER_CONFIG
+from .config import DATA_DIR, CRAWLER_CONFIG
 
 # 日志内部配置
 _LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"

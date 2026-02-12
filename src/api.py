@@ -19,9 +19,9 @@ from typing import Optional, List, Tuple
 
 import requests
 
-from config import CRAWLER_CONFIG, CACHE_DIR
-from logger import get_logger
-from utils import parse_weibo_time
+from .config import CRAWLER_CONFIG, CACHE_DIR
+from .logger import get_logger
+from .utils import parse_weibo_time
 
 logger = get_logger(__name__)
 

@@ -6,8 +6,8 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import get_blogger, get_blogger_comments
-from display import display_blogger_header, display_blogger_comment
+from src.database import get_blogger, get_blogger_comments
+from src.display import display_blogger_header, display_blogger_comment
 
 
 def show_blogger_comments(uid: str, page_size: int = 5):

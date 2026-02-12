@@ -8,7 +8,7 @@
 """
 from collections import defaultdict
 
-from database import init_database, get_stats, get_recent_posts
+from .database import init_database, get_stats, get_recent_posts
 
 
 # ANSI 颜色代码
@@ -164,7 +164,7 @@ def display_post_with_comments(mid: str, blogger_only: bool = False, show_commen
         blogger_only: 只展示博主评论
         show_comments: 是否展示评论
     """
-    from database import get_post_with_blogger, get_comments_by_mid
+    from .database import get_post_with_blogger, get_comments_by_mid
 
     post = get_post_with_blogger(mid)
     if not post:
@@ -227,7 +227,7 @@ def show_recent_posts(limit: int = 10):
 
 def show_blogger_status(uid: str):
     """显示博主抓取进度和数据统计"""
-    from database import get_blogger_stats
+    from .database import get_blogger_stats
 
     init_database()
     stats = get_blogger_stats(uid)

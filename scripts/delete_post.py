@@ -6,13 +6,13 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import (
+from src.database import (
     get_post_with_blogger,
     get_comments_by_mid,
     delete_post_only,
     delete_comments_by_mid,
 )
-from display import truncate_text, Colors, format_user_name, format_comment_content
+from src.display import truncate_text, Colors, format_user_name, format_comment_content
 
 
 def display_comments_preview(comments: list, max_display: int = 10):

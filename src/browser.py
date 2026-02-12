@@ -12,9 +12,9 @@ from typing import Optional
 
 from playwright.sync_api import sync_playwright, Page, Browser
 
-from config import CRAWLER_CONFIG, COOKIE_FILE
-from logger import get_logger
-from utils import random_delay
+from .config import CRAWLER_CONFIG, COOKIE_FILE
+from .logger import get_logger
+from .utils import random_delay
 
 logger = get_logger(__name__)
 

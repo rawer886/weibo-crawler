@@ -12,7 +12,7 @@ import re
 import time
 from datetime import datetime, timedelta
 
-from logger import get_logger
+from .logger import get_logger
 
 logger = get_logger(__name__)
 

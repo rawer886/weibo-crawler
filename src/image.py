@@ -13,9 +13,9 @@ from typing import Optional, List
 
 import requests
 
-from config import CRAWLER_CONFIG, IMAGES_DIR
-from logger import get_logger
-from utils import mid_to_numeric
+from .config import CRAWLER_CONFIG, IMAGES_DIR
+from .logger import get_logger
+from .utils import mid_to_numeric
 
 logger = get_logger(__name__)
 

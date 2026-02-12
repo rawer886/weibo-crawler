@@ -7,8 +7,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Optional
 
-from config import DATABASE_PATH
-from logger import get_logger
+from .config import DATABASE_PATH
+from .logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -7,11 +7,11 @@
 """
 import time
 
-from config import CRAWLER_CONFIG
-from database import init_database
-from crawler import WeiboCrawler
-from display import show_db_status
-from logger import get_logger
+from .config import CRAWLER_CONFIG
+from .database import init_database
+from .crawler import WeiboCrawler
+from .display import show_db_status
+from .logger import get_logger
 
 logger = get_logger(__name__)
 

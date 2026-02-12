@@ -12,7 +12,7 @@ import argparse
 import sys
 import re
 
-from commands import crawl_single_post, crawl_user
+from src.commands import crawl_single_post, crawl_user
 
 
 def parse_weibo_url(url: str) -> dict:

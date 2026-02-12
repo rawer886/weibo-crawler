@@ -11,7 +11,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from display import show_db_status, show_recent_posts, show_blogger_status
+from src.display import show_db_status, show_recent_posts, show_blogger_status
 
 USAGE = """用法: python scripts/show_stats.py [选项]
 

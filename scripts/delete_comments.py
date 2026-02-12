@@ -6,8 +6,8 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import get_post_with_blogger, get_comments_by_mid, delete_comments_by_mid
-from display import display_post_header, display_comments, Colors
+from src.database import get_post_with_blogger, get_comments_by_mid, delete_comments_by_mid
+from src.display import display_post_header, display_comments, Colors
 
 
 def delete_comments_for_post(mid: str):
