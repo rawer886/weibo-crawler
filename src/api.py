@@ -149,6 +149,7 @@ class WeiboAPI:
             "Referer": "https://m.weibo.cn/",
         }
 
+        resp = None
         try:
             resp = requests.get(url, headers=headers, cookies=self.cookies, timeout=10)
             data = resp.json()
