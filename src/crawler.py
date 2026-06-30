@@ -63,6 +63,10 @@ class WeiboCrawler:
     def start(self, url: str = None):
         """启动浏览器"""
         self.browser.start(url)
+        self._bind_page_dependencies()
+
+    def _bind_page_dependencies(self):
+        """同步依赖当前浏览器页面的组件"""
         self.parser = PageParser(self.browser.page)
         self.image_downloader.set_page(self.browser.page)
 
@@ -73,6 +77,7 @@ class WeiboCrawler:
     def login(self) -> bool:
         """登录"""
         result = self.browser.login()
+        self._bind_page_dependencies()
         if result:
             self.api.set_cookies(self.browser.cookies_for_request)
         return result

@@ -27,6 +27,7 @@ class BrowserManager:
         self.page: Optional[Page] = None
         self.playwright = None
         self.is_logged_in = False
+        self.headless = False
         self.cookies_for_request = {}  # 用于 requests 库的 cookies
 
     def start(self, url: str = None):
@@ -44,6 +45,17 @@ class BrowserManager:
             logger.info("未找到 cookies，自动关闭无头模式")
             headless = False
 
+        self._open_browser(headless)
+
+        # 加载已保存的 cookies
+        self._load_cookies()
+
+        if url:
+            logger.info(f"访问页面: {url}")
+            self.page.goto(url)
+
+    def _open_browser(self, headless: bool):
+        """按指定模式打开浏览器窗口"""
         # 获取屏幕尺寸，根据配置的比例计算视口大小
         viewport_height = 900
         viewport_width = 720
@@ -75,17 +87,22 @@ class BrowserManager:
             ]
         )
 
+        self.headless = headless
         self.page = self.browser.new_page(viewport={"width": viewport_width, "height": viewport_height})
         self.page.set_extra_http_headers({
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         })
 
-        # 加载已保存的 cookies
-        self._load_cookies()
+    def _ensure_visible_for_login(self):
+        """手动登录必须使用可见浏览器窗口"""
+        if not self.headless:
+            return
 
-        if url:
-            logger.info(f"访问页面: {url}")
-            self.page.goto(url)
+        logger.info("当前为无头模式，重新打开可见浏览器用于登录")
+        if self.browser:
+            self.browser.close()
+        self._open_browser(headless=False)
+        self._load_cookies()
 
     def stop(self):
         """关闭浏览器"""
@@ -125,6 +142,7 @@ class BrowserManager:
 
     def login(self) -> bool:
         """登录微博（手动登录）"""
+        self._ensure_visible_for_login()
         logger.info("正在打开微博登录页面...")
         self.page.goto("https://weibo.com/login.php")
 
