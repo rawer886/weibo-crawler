@@ -99,18 +99,40 @@ class BrowserManager:
             return
 
         logger.info("当前为无头模式，重新打开可见浏览器用于登录")
-        if self.browser:
-            self.browser.close()
+        self._close_browser()
         self._open_browser(headless=False)
         self._load_cookies()
+
+    def _close_browser(self):
+        """关闭浏览器，忽略退出过程中的连接中断"""
+        if not self.browser:
+            return
+
+        try:
+            self.browser.close()
+        except Exception as e:
+            logger.debug(f"关闭浏览器时忽略错误: {e}")
+        finally:
+            self.browser = None
+            self.page = None
+
+    def _stop_playwright(self):
+        """停止 Playwright，忽略退出过程中的连接中断"""
+        if not self.playwright:
+            return
+
+        try:
+            self.playwright.stop()
+        except Exception as e:
+            logger.debug(f"停止 Playwright 时忽略错误: {e}")
+        finally:
+            self.playwright = None
 
     def stop(self):
         """关闭浏览器"""
         logger.info("关闭浏览器...")
-        if self.browser:
-            self.browser.close()
-        if self.playwright:
-            self.playwright.stop()
+        self._close_browser()
+        self._stop_playwright()
 
     def _save_cookies(self):
         """保存 cookies 到文件"""
@@ -140,34 +162,69 @@ class BrowserManager:
         """将 Playwright cookies 转换为 requests 可用的格式"""
         self.cookies_for_request = {c["name"]: c["value"] for c in cookies}
 
+    def _has_visible_login_button(self) -> bool:
+        """检查页面是否显示登录按钮"""
+        try:
+            login_btn = self.page.locator('text="登录"').first
+            return login_btn.count() > 0 and login_btn.is_visible(timeout=1000)
+        except Exception:
+            return False
+
+    def _has_user_avatar(self) -> bool:
+        """检查页面是否显示登录用户头像"""
+        try:
+            user_avatar = self.page.locator('[class*="avatar"]').first
+            return user_avatar.count() > 0
+        except Exception:
+            return False
+
+    def _has_login_cookie(self) -> bool:
+        """检查是否存在微博登录 cookie"""
+        cookies = self.page.context.cookies()
+        return any(c["name"] in {"SUB", "SSOLoginState"} for c in cookies)
+
     def login(self) -> bool:
         """登录微博（手动登录）"""
         self._ensure_visible_for_login()
         logger.info("正在打开微博登录页面...")
         self.page.goto("https://weibo.com/login.php")
 
-        print("\n" + "=" * 50)
-        print("请在浏览器中手动登录微博")
-        print("登录成功后，按 Enter 键继续...")
-        print("=" * 50 + "\n")
+        print("\n" + "=" * 50, flush=True)
+        print("请在浏览器中手动登录微博", flush=True)
+        print("登录成功后，按 Enter 键继续...", flush=True)
+        print("=" * 50 + "\n", flush=True)
 
         input()
 
-        # 验证登录状态
-        self.page.goto("https://weibo.com")
-        random_delay(2.5)
-
+        print("正在验证登录状态...", flush=True)
         try:
-            self.page.wait_for_load_state("networkidle", timeout=10000)
-            if "login" not in self.page.url.lower():
+            # 验证登录状态
+            self.page.goto("https://weibo.com", wait_until="domcontentloaded", timeout=15000)
+            random_delay(1)
+            try:
+                self.page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception as e:
+                logger.debug(f"等待页面稳定时出错: {e}")
+
+            if "login" in self.page.url.lower() or "passport" in self.page.url.lower():
+                logger.warning("未检测到登录状态，已退出")
+                return False
+
+            if self._has_visible_login_button():
+                logger.warning("未检测到登录状态，已退出")
+                return False
+
+            if self._has_user_avatar() or self._has_login_cookie():
                 self.is_logged_in = True
                 self._save_cookies()
                 logger.info("登录成功！")
                 return True
         except Exception as e:
+            logger.warning("登录未完成或浏览器已关闭")
             logger.debug(f"检查登录状态时出错: {e}")
+            return False
 
-        logger.warning("无法确认登录状态，请确保已登录")
+        logger.warning("未检测到登录状态，已退出")
         return False
 
     def check_login_status(self) -> bool:
